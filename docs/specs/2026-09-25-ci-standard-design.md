@@ -83,7 +83,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@v1
+    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@<full SHA> # v1.x.y
 ```
 
 `ci.yml` calls each enabled module as a job with `if:` on its input, then a `gate` job that `needs` all
@@ -130,6 +130,26 @@ for me. Squash is the method because a Dependabot PR is one commit.
 
 Joint repos (org-owned with a co-owner) get auto-merge only after the co-owner agrees; until then they
 get everything else.
+
+## Security of Ward itself
+
+Every repo runs Ward's code, so Ward is the most trusted repo I own and gets the strictest protection.
+
+- **Threat:** someone with push access to Ward changes what every repo runs. The CI modules get a
+  read-only token and no secrets, so a bad module can at worst report a false green. The auto-merge job
+  holds `contents: write` and `pull-requests: write`, so it is the one that matters.
+- **Pinning:** callers use `@v1` for the read-only CI entry point, so improvements propagate. The
+  `automerge` job is pinned to a full commit SHA with a version comment; Dependabot proposes each bump as
+  a PR I read, so the write-holding code never changes under a repo silently.
+- **Ward's own rulesets:** the branch ruleset from the baseline, plus a tag ruleset on `v*` that blocks
+  updates and deletion by anyone but me, so `v1` cannot be moved by a stolen token with only repo scope
+  through a force-push.
+- **Triggers:** Ward uses `pull_request`, never `pull_request_target`, so fork PRs run with a read-only
+  token and no secrets.
+- **Supply chain:** the 3-day Dependabot cooldown keeps a freshly published malicious patch out long
+  enough for it to be caught upstream. Auto-merged changes still pass tests and CodeQL, and repos that
+  deploy on merge to `main` (Ignite, Kenaz, Rookdex) are the ones where this matters most.
+- **Account:** 2FA stays on; Ward holds no secrets except the audit token, which is read-only.
 
 ## Stack modules
 
