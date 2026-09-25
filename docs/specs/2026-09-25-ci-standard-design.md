@@ -142,8 +142,9 @@ Every repo runs Ward's code, so Ward is the most trusted repo I own and gets the
   `automerge` job is pinned to a full commit SHA with a version comment; Dependabot proposes each bump as
   a PR I read, so the write-holding code never changes under a repo silently.
 - **Ward's own rulesets:** the branch ruleset from the baseline, plus a tag ruleset on `v*` that blocks
-  updates and deletion by anyone but me, so `v1` cannot be moved by a stolen token with only repo scope
-  through a force-push.
+  updates and deletion, with repository admin as the only bypass (moving `v1` is part of every release).
+  It stops accidents and any future collaborator; it does not stop someone holding my own admin token —
+  that is what 2FA and a minimal-scope `gh` token are for.
 - **Triggers:** Ward uses `pull_request`, never `pull_request_target`, so fork PRs run with a read-only
   token and no secrets.
 - **Supply chain:** the 3-day Dependabot cooldown keeps a freshly published malicious patch out long
