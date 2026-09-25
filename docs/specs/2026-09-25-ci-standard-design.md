@@ -1,4 +1,4 @@
-# Vakt — CI and security standard
+# Ward — CI and security standard
 
 **Status:** design, awaiting review · **Date:** 2026-09-25
 
@@ -7,7 +7,7 @@
 Every repo of mine should catch bugs, security risks and accessibility regressions before they reach
 `main`, and fix the safe classes of problem on its own. Today that coverage is uneven: some repos have
 CI, most C# repos have none, Dependabot is configured in three, and nothing enforces that a red check
-blocks a merge. Vakt is one public repo that holds the whole standard, so every repo — scaffolded from
+blocks a merge. Ward is one public repo that holds the whole standard, so every repo — scaffolded from
 workbench or not — calls the same checks and gets improvements by moving one tag.
 
 Nothing goes in unless it catches a real class of defect. Each check below names what it catches.
@@ -28,7 +28,7 @@ Nothing goes in unless it catches a real class of defect. Each check below names
 ## Architecture
 
 ```
-malinfossum/vakt (public)
+malinfossum/ward (public)
 ├── .github/workflows/
 │   ├── ci.yml              reusable entry point: inputs per stack, final `gate` job
 │   ├── node.yml            reusable module: npm scripts contract
@@ -40,9 +40,9 @@ malinfossum/vakt (public)
 │   ├── dependabot-automerge.yml   reusable: patch/minor auto-merge
 │   ├── repo-hygiene.yml    reusable (moved from workbench)
 │   ├── repo-audit.yml      weekly sweep over every repo (moved from workbench)
-│   └── self-test.yml       vakt's own CI
+│   └── self-test.yml       Ward's own CI
 ├── templates/              dependabot.yml per ecosystem mix, caller ci.yml, ruleset.json
-├── packages/a11y/          @malinfossum/vakt-a11y — Playwright helpers + live-region audit
+├── packages/a11y/          @malinfossum/ward-a11y — Playwright helpers + live-region audit
 ├── tools/                  repo-hygiene.mjs, repo-audit additions, apply.mjs
 ├── stacks.json             detection rules → module + required scripts
 └── docs/
@@ -52,9 +52,9 @@ malinfossum/vakt (public)
 reusable workflow, and cross-owner calls cannot use `secrets: inherit` — no module takes secrets, so
 that limit does not bite.
 
-**Versioning:** Vakt follows SemVer from 0.1.0; the first release callers pin is `v1.0.0`, with a moving
+**Versioning:** Ward follows SemVer from 0.1.0; the first release callers pin is `v1.0.0`, with a moving
 `v1` major tag. Callers use `@v1`, so a minor release reaches every repo without a PR per repo; a breaking
-change ships as `v2` and Dependabot proposes the bump. Third-party actions *inside* Vakt are pinned to a
+change ships as `v2` and Dependabot proposes the bump. Third-party actions *inside* Ward are pinned to a
 full commit SHA with a version comment, which Dependabot keeps current.
 
 ## The caller
@@ -62,8 +62,8 @@ full commit SHA with a version comment, which Dependabot keeps current.
 The only CI file a repo carries:
 
 ```yaml
-# .github/workflows/vakt.yml
-name: Vakt
+# .github/workflows/ward.yml
+name: Ward
 on:
   pull_request:
   push:
@@ -71,8 +71,8 @@ on:
 permissions:
   contents: read
 jobs:
-  vakt:
-    uses: malinfossum/vakt/.github/workflows/ci.yml@v1
+  ward:
+    uses: malinfossum/ward/.github/workflows/ci.yml@v1
     with:
       node: web          # working directory, empty = module off
       dotnet: api
@@ -83,12 +83,12 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: malinfossum/vakt/.github/workflows/dependabot-automerge.yml@v1
+    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@v1
 ```
 
 `ci.yml` calls each enabled module as a job with `if:` on its input, then a `gate` job that `needs` all
 of them, runs with `if: always()` and fails when any needed job ended in `failure` or `cancelled`
-(skipped is fine). The ruleset requires exactly one check: **`vakt / gate`** (format
+(skipped is fine). The ruleset requires exactly one check: **`ward / gate`** (format
 `<caller job> / <reusable job>`). Adding a stack to a repo never touches the ruleset.
 
 ## Baseline — every public repo I own
@@ -104,7 +104,7 @@ of them, runs with `if: always()` and fails when any needed job ended in `failur
 | `repo-hygiene` job | README drift against the repo | Existing checker, `warn` by default |
 
 **Ruleset contents:** target the default branch; require a pull request (0 approvals — I am the only
-reviewer); require status check `vakt / gate` and a strict up-to-date branch; require code scanning
+reviewer); require status check `ward / gate` and a strict up-to-date branch; require code scanning
 results (CodeQL, errors only); block force pushes and deletion; no bypass actors.
 
 **Dependabot template:** one group per ecosystem for `minor` + `patch` version updates, majors ungrouped
@@ -125,7 +125,7 @@ only when the author is `dependabot[bot]`. It uses `dependabot/fetch-metadata` a
   `apply.mjs` only enables "Allow auto-merge" after the ruleset is in place, and the workflow checks for
   the required check via the API and refuses if it is missing.
 
-The merge itself waits for `vakt / gate` and CodeQL. Majors and runtime-bound packages stay as open PRs
+The merge itself waits for `ward / gate` and CodeQL. Majors and runtime-bound packages stay as open PRs
 for me. Squash is the method because a Dependabot PR is one commit.
 
 Joint repos (org-owned with a co-owner) get auto-merge only after the co-owner agrees; until then they
@@ -176,7 +176,7 @@ as already decided. Other private repos and forks are not covered. Deploy workfl
 
 ## Accessibility module
 
-Runs inside the `node` module's `test:e2e` step, through `@malinfossum/vakt-a11y`. Automated checks catch
+Runs inside the `node` module's `test:e2e` step, through `@malinfossum/ward-a11y`. Automated checks catch
 a minority of accessibility defects; a manual NVDA pass with workbench's live-region sandbox stays part
 of every release checklist.
 
@@ -210,13 +210,13 @@ it works, it joins the `dotnet` module; if not, the fallback is UI Automation te
 
 ## Capturing new stacks
 
-1. **The skill.** A `vakt` skill in loadout fetches `stacks.json` from the tagged release, detects the
+1. **The skill.** A `ward` skill in loadout fetches `stacks.json` from the tagged release, detects the
    repo's stacks, writes the caller files, `dependabot.yml` and any `Directory.Build.props`, adds missing
    npm scripts, then applies the repo settings through `tools/apply.mjs` — each settings change shown and
-   confirmed first. It fires on "apply vakt", from `project-init` after scaffolding, and when a new
+   confirmed first. It fires on "apply ward", from `project-init` after scaffolding, and when a new
    framework lands in a repo.
 2. **Unknown stack.** When a detection finds files no rule covers, the skill stops and drafts a new
-   module as a PR to Vakt — it never applies a guessed config. Capacitor Android is the first expected
+   module as a PR to Ward — it never applies a guessed config. Capacitor Android is the first expected
    case.
 3. **The audit.** The weekly `repo-audit` adds three checks per repo: baseline settings on (Dependabot,
    secret scanning, CodeQL, ruleset), caller present on `@v1`, and no uncovered stack. It also reports
@@ -224,20 +224,20 @@ it works, it joins the `dotnet` module; if not, the fallback is UI Automation te
 
 ## Migration from workbench
 
-`repo-hygiene.mjs`, its tests, `docs/repo-hygiene.md`, and both workflows move to Vakt. Workbench keeps
-its `repo-hygiene.yml` for one release as a forwarder that calls Vakt, so nothing breaks mid-move. Then
+`repo-hygiene.mjs`, its tests, `docs/repo-hygiene.md`, and both workflows move to Ward. Workbench keeps
+its `repo-hygiene.yml` for one release as a forwarder that calls Ward, so nothing breaks mid-move. Then
 the five consumer repos (hugin, malinfossum, profile-dashboard, spindle, varde) and the six scaffolds
-switch to the Vakt caller, and the forwarder is removed. The weekly audit needs the
-`PROFILE_README_TOKEN` secret set on Vakt — I set that by hand. Spindle's `commit-identity.yml` is
+switch to the Ward caller, and the forwarder is removed. The weekly audit needs the
+`PROFILE_README_TOKEN` secret set on Ward — I set that by hand. Spindle's `commit-identity.yml` is
 retired in favour of the `identity` module, which allows `dependabot[bot]`.
 
 ## Rollout
 
-1. Vakt core: `ci.yml`, `gate`, `identity`, `node`, `dotnet`, templates, self-test. Exit: a fixture repo
-   per stack passes, and a deliberately broken fixture fails `vakt / gate`.
-2. Hygiene and audit migration. Exit: audit runs from Vakt and reports every repo.
-3. `vakt` skill + `apply.mjs`. Exit: applied to one web repo and one C# repo end to end.
-4. `vakt-a11y` package and live-region checks; Guidepup spike in Playwright without a CDN script tag.
+1. Ward core: `ci.yml`, `gate`, `identity`, `node`, `dotnet`, templates, self-test. Exit: a fixture repo
+   per stack passes, and a deliberately broken fixture fails `ward / gate`.
+2. Hygiene and audit migration. Exit: audit runs from Ward and reports every repo.
+3. `ward` skill + `apply.mjs`. Exit: applied to one web repo and one C# repo end to end.
+4. `ward-a11y` package and live-region checks; Guidepup spike in Playwright without a CDN script tag.
    Exit: each live-region rule has a failing fixture that fails and a clean one that passes.
 5. Roll out to every public repo in `warn`, then scaffolds. Exit: audit shows zero repos missing the
    baseline.
@@ -288,4 +288,4 @@ retired in favour of the `identity` module, which allows `dependabot[bot]`.
 - Axe.Windows activity is low; the WPF path may end on the UI Automation fallback.
 - The ruleset's "require code scanning results" rule was not in the 2026-09-25 verification pass;
   confirm it is free on public repos before step 1 relies on it.
-- Publishing `@malinfossum/vakt-a11y` to npm is a gated step I do or approve at the time.
+- Publishing `@malinfossum/ward-a11y` to npm is a gated step I do or approve at the time.
