@@ -30,21 +30,15 @@ Nothing goes in unless it catches a real class of defect. Each check below names
 ```
 malinfossum/ward (public)
 ├── .github/workflows/
-│   ├── ci.yml              reusable entry point: inputs per stack, final `gate` job
-│   ├── node.yml            reusable module: npm scripts contract
-│   ├── dotnet.yml          reusable module: build, format, test, EF check
-│   ├── python.yml          reusable module
-│   ├── powershell.yml      reusable module
-│   ├── docker.yml          reusable module
-│   ├── identity.yml        reusable module: commit author + trailer guard
+│   ├── ci.yml              reusable entry point: one job per module, final `gate` job
 │   ├── dependabot-automerge.yml   reusable: patch/minor auto-merge
 │   ├── repo-hygiene.yml    reusable (moved from workbench)
 │   ├── repo-audit.yml      weekly sweep over every repo (moved from workbench)
-│   ├── canary.yml          weekly and post-tag run of the published @v1, as a consumer (Plan 5)
-│   └── self-test.yml       Ward's own CI
-├── templates/              dependabot.yml per ecosystem mix, caller ci.yml, ruleset.json
+│   └── canary.yml          weekly and post-tag run of the published @v1, as a consumer (Plan 5)
+├── templates/              dependabot.yml per ecosystem mix, ward.yml caller, ruleset.json
 ├── packages/a11y/          @malinfossum/ward-a11y — Playwright helpers + live-region audit
-├── tools/                  repo-hygiene.mjs, repo-audit additions, apply.mjs
+├── tools/                  identity.mjs, drift.mjs, node-contract.mjs, dotnet-check.mjs, automerge.mjs,
+│                           repo-hygiene.mjs, repo-audit additions, apply.mjs
 ├── stacks.json             detection rules → module + required scripts
 └── docs/
 ```
@@ -57,6 +51,14 @@ that limit does not bite.
 `v1` major tag. Callers use `@v1`, so a minor release reaches every repo without a PR per repo; a breaking
 change ships as `v2` and Dependabot proposes the bump. Third-party actions *inside* Ward are pinned to a
 full commit SHA with a version comment, which Dependabot keeps current.
+
+**Deviations recorded 2026-09-25 (Plan 1):** modules are jobs inside `ci.yml` rather than nested
+reusable workflows, because GitHub does not document how `./` resolves in nested cross-repo calls; the
+EF input is a project path; `stacks.json` arrives with the skill in Plan 3. `node-contract.mjs` runs
+`npm` through a shell (`spawnSync(..., { shell: true })`), unlike the other tools' argument-array calls,
+because `npm` needs a shell on Windows. The `fixtures` job in `ward.yml`, which runs the module tests
+against the fixture repos, carries a 30-minute timeout even though it is neither a `node` nor a `dotnet`
+job.
 
 ## The caller
 
@@ -80,7 +82,7 @@ jobs:
     with:
       node: web          # working directory, empty = module off
       dotnet: api        # directory, or a .sln/.slnx/.csproj file
-      dotnet-ef: true
+      dotnet-ef-project: src/App.Data
       a11y: strict       # off | warn | strict
   automerge:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
@@ -108,7 +110,7 @@ instead of burning runner time. Every module runs with .NET, Astro and Wrangler 
 | Secret scanning + push protection | A credential pushed by mistake — blocked before it lands | Repo setting |
 | CodeQL default setup + Copilot Autofix | Injection, XSS, unsafe deserialisation, workflow script injection (the `actions` language); Autofix proposes the patch on the PR | Repo setting |
 | Ruleset on `main` | Merging red, force-pushing, deleting `main` | `templates/ruleset.json` via API |
-| `identity` job | Commits authored as anyone but me or Dependabot; `Co-Authored-By` / `Claude-Session` / "Generated with" trailers; a PR that changes the files deciding what Ward checks (warning) | `identity.yml` in `ci.yml`, always on |
+| `identity` job | Commits authored as anyone but me or Dependabot; `Co-Authored-By` / `Claude-Session` / "Generated with" trailers; a PR that changes the files deciding what Ward checks (warning) | `identity` job in `ci.yml`, always on |
 | `repo-hygiene` job | README drift against the repo | Existing checker, `warn` by default |
 
 **Identity rules:** the attribution check matches only lines that start with the trailer or the
@@ -248,7 +250,7 @@ Repos carry a `Directory.Build.props` from `templates/` with `AnalysisLevel=late
 `TreatWarningsAsErrors=true`, `NuGetAudit=true`, `NuGetAuditMode=all`, so a vulnerable package
 (NU1901–NU1904) fails the build. When I have to live with a vulnerable package for a while, I suppress
 that one advisory with `<NuGetAuditSuppress Include="<advisory URL>" />` and a dated comment saying why,
-never by turning `NuGetAudit` off; the weekly audit lists every suppression. `dotnet-ef: true` adds
+never by turning `NuGetAudit` off; the weekly audit lists every suppression. `dotnet-ef-project` adds
 `dotnet ef migrations has-pending-model-changes` (exit 1 when I changed the model and forgot the
 migration). `os` input: `ubuntu-latest` by default, `windows-latest` for WPF. SDK from `global.json` in
 the module's directory, else at the repo root, else .NET 10.
