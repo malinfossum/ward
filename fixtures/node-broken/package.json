@@ -1,0 +1,8 @@
+{
+  "name": "node-broken",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "node -e \"process.exitCode = 1\""
+  }
+}

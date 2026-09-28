@@ -1,0 +1,15 @@
+<Project>
+  <!-- Ward baseline: analyzers on, warnings fail the build, and a vulnerable
+       package (NU1901-NU1904) fails restore through TreatWarningsAsErrors. -->
+  <PropertyGroup>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+  </PropertyGroup>
+  <!-- To live with one vulnerable package for a while, suppress only that
+       advisory, never NuGetAudit itself, with a dated reason above it:
+       <ItemGroup>
+         <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-xxxx-xxxx-xxxx" />
+       </ItemGroup> -->
+</Project>

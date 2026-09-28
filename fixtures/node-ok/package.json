@@ -1,0 +1,10 @@
+{
+  "name": "node-ok",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "node -e \"process.exitCode = 0\"",
+    "test": "node --test"
+  }
+}
