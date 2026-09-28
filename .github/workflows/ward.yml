@@ -19,13 +19,13 @@ jobs:
   ward:
     uses: ./.github/workflows/ci.yml
     with:
-      node: .
-      dotnet: fixtures/dotnet-ok
+      node: fixtures/node-broken
+      dotnet: fixtures/dotnet-broken
 
   ward-windows:
     uses: ./.github/workflows/ci.yml
     with:
-      dotnet: fixtures/dotnet-ok
+      dotnet: fixtures/dotnet-broken
       dotnet-os: windows-latest
 
   fixtures:
