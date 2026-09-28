@@ -84,6 +84,34 @@ test("a repo without the required check never auto-merges", () => {
   assert.match(result.reason, /does not require "ward \/ gate"/);
 });
 
+test("a missing ecosystem never auto-merges", () => {
+  const result = decide({ ...ok, ecosystem: "", dependencies: ["hadolint/hadolint-action"] });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /missing Dependabot metadata/);
+});
+
+test("missing dependencies never auto-merges", () => {
+  const result = decide({ ...ok, ecosystem: "nuget", dependencies: [] });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /missing Dependabot metadata/);
+});
+
+test("a fork of Ward under a longer name never auto-merges", () => {
+  const result = decide({
+    ...ok,
+    ecosystem: "github_actions",
+    dependencies: ["malinfossum/ward-tools"],
+  });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /Ward itself/);
+});
+
+test("no authors at all never auto-merges", () => {
+  const result = decide({ ...ok, authors: [] });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /someone other than Dependabot/);
+});
+
 test("requiredChecksFrom reads status-check rules", () => {
   const rules = [
     { type: "deletion" },
