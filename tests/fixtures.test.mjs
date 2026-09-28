@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -113,3 +113,14 @@ for (const [module, cases] of Object.entries(REJECTS)) {
     });
   }
 }
+
+test("every module in ci.yml has a fixture it rejects", () => {
+  const jobs = readFileSync(".github/workflows/ci.yml", "utf8").split(/^jobs:$/m)[1];
+  const modules = [...jobs.matchAll(/^ {2}([a-z][\w-]*):$/gm)]
+    .map((m) => m[1])
+    .filter((job) => job !== "gate");
+  assert.deepEqual(modules.sort(), Object.keys(REJECTS).sort());
+  for (const [module, cases] of Object.entries(REJECTS)) {
+    assert.ok(cases.length > 0, `${module} has no rejecting case`);
+  }
+});

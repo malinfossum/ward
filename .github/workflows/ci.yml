@@ -1,0 +1,187 @@
+# Ward's entry point. A repo calls this once; each module is a job that runs
+# only when its input is set, and `gate` is the single required check.
+name: Ward
+
+on:
+  workflow_call:
+    inputs:
+      node:
+        description: Directory of the npm project. Empty turns the module off.
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: "24"
+      a11y:
+        description: off, warn or strict
+        type: string
+        default: "off"
+      dotnet:
+        description: Directory holding the solution, or a .sln, .slnx or .csproj file. Empty turns the module off.
+        type: string
+        default: ""
+      dotnet-os:
+        type: string
+        default: ubuntu-latest
+      dotnet-ef-project:
+        description: EF Core project to check for model changes without a migration. Empty skips it.
+        type: string
+        default: ""
+      dotnet-ef-startup-project:
+        type: string
+        default: ""
+      allowed-emails:
+        description: >-
+          Commit addresses allowed besides Dependabot, comma or newline separated. This file is
+          public: list a co-owner only with their consent, by their GitHub noreply address.
+        type: string
+        default: malinfossum.dev@proton.me
+      allow-human-coauthors:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  ASTRO_TELEMETRY_DISABLED: "1"
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Commits are mine and carry no AI attribution
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          ALLOWED: ${{ inputs.allowed-emails }}
+          ALLOW_HUMAN_COAUTHORS: ${{ inputs.allow-human-coauthors }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: node "$RUNNER_TEMP/ward/tools/identity.mjs"
+      - name: Changes to what Ward checks
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node "$RUNNER_TEMP/ward/tools/drift.mjs"
+
+  node:
+    if: inputs.node != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.node }}/package-lock.json
+      - name: Install
+        working-directory: ${{ inputs.node }}
+        run: npm ci
+      - name: npm script contract
+        env:
+          A11Y: ${{ inputs.a11y }}
+          NODE_DIR: ${{ inputs.node }}
+        run: node "$RUNNER_TEMP/ward/tools/node-contract.mjs" "$NODE_DIR"
+
+  dotnet:
+    if: inputs.dotnet != ''
+    runs-on: ${{ inputs.dotnet-os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Find global.json in the module's folder, else at the root
+        id: sdk
+        env:
+          DOTNET_PATH: ${{ inputs.dotnet }}
+        run: |
+          dir="$DOTNET_PATH"
+          if [ -f "$dir" ]; then dir="$(dirname "$dir")"; fi
+          for candidate in "$dir/global.json" global.json; do
+            if [ -f "$candidate" ]; then
+              echo "file=$candidate" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
+      - name: .NET from global.json
+        if: steps.sdk.outputs.file != ''
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: ${{ steps.sdk.outputs.file }}
+      - name: .NET 10
+        if: steps.sdk.outputs.file == ''
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install dotnet-ef
+        if: inputs.dotnet-ef-project != ''
+        run: dotnet tool install --global dotnet-ef --version 10.0.12
+      - name: Build, format, test
+        env:
+          DOTNET_PATH: ${{ inputs.dotnet }}
+          EF_PROJECT: ${{ inputs.dotnet-ef-project }}
+          EF_STARTUP_PROJECT: ${{ inputs.dotnet-ef-startup-project }}
+        run: node "$RUNNER_TEMP/ward/tools/dotnet-check.mjs" "$DOTNET_PATH"
+
+  gate:
+    needs: [identity, node, dotnet]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Every enabled check passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::A Ward check failed. Open the failed job above for the reason."
+          exit 1
+      - run: echo "Every enabled Ward check passed."
