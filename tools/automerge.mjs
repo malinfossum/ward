@@ -14,7 +14,9 @@ export const RUNTIME_BOUND = [
   /^Microsoft\.NET(Core)?\./i,
   /^System\./i,
   /^dotnet-sdk$/i,
-  /\/dotnet\//i,
+  // The image is the runtime, and CI never runs inside it: mcr.microsoft.com/dotnet/aspnet
+  // and a registry-less name like dotnet/aspnet both refer to the same container image.
+  /(^|\/)dotnet\//i,
 ];
 
 // Ward's workflows hold write access in every repo that calls them, and the

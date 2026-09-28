@@ -43,6 +43,21 @@ test("a runtime-bound .NET package waits for me", () => {
   }
 });
 
+test("a .NET container image without a registry prefix also waits for me", () => {
+  for (const name of ["dotnet/aspnet", "dotnet/sdk"]) {
+    const result = decide({ ...ok, dependencies: ["vitest", name] });
+    assert.equal(result.merge, false, name);
+    assert.match(result.reason, /runtime-bound/);
+    assert.match(result.reason, new RegExp(name.replace("/", "\\/")));
+  }
+});
+
+test("an unrelated container image merges", () => {
+  for (const name of ["node", "library/nginx"]) {
+    assert.equal(decide({ ...ok, dependencies: ["vitest", name] }).merge, true, name);
+  }
+});
+
 test("the dotnet-sdk ecosystem waits for me whatever the dependency is called", () => {
   for (const ecosystem of ["dotnet-sdk", "dotnet_sdk"]) {
     const result = decide({ ...ok, ecosystem, dependencies: ["sdk"] });

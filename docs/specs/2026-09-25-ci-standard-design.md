@@ -155,7 +155,9 @@ only when the author is `dependabot[bot]`. It uses `dependabot/fetch-metadata` a
 - no dependency in the PR matches the runtime-bound list: `Microsoft.AspNetCore.*`,
   `Microsoft.EntityFrameworkCore.*`, `Microsoft.Extensions.*`, `Microsoft.NET.*`, `System.*`; and the
   PR's package ecosystem is not `dotnet-sdk`, so an SDK bump in `global.json` is refused by its
-  ecosystem, whatever the dependency is called;
+  ecosystem, whatever the dependency is called; a .NET container image (`mcr.microsoft.com/dotnet/*`,
+  Docker ecosystem, with or without the registry prefix) is refused too, because the image is the
+  runtime, and CI never runs inside it;
 - for GitHub Actions, every action is owned by `actions/`, `github/` or `dependabot/`. A third-party
   action waits for my review whatever the update type, because it runs inside workflows that can hold
   deploy secrets. This amends the "patch + minor" rule I locked on 2026-09-25 (decided 2026-09-28);
