@@ -1,0 +1,50 @@
+# Ward checks itself with its own entry point, on Linux and on Windows, plus the
+# fixture suite. Ward's own auto-merge job arrives with v1.0.0 (Plan 5): it must
+# call a released SHA, never ./, or a pull request could change the code that
+# runs with write access before I review it.
+name: Ward
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ward:
+    uses: ./.github/workflows/ci.yml
+    with:
+      node: .
+      dotnet: fixtures/dotnet-ok
+
+  ward-windows:
+    uses: ./.github/workflows/ci.yml
+    with:
+      dotnet: fixtures/dotnet-ok
+      dotnet-os: windows-latest
+
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      ASTRO_TELEMETRY_DISABLED: "1"
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - run: npm ci
+      - run: npm run test:fixtures
