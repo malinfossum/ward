@@ -1,0 +1,68 @@
+# Ward baseline. Keep the blocks for ecosystems this repo uses; delete the rest.
+# Majors are never grouped, so each gets its own PR for me to read.
+version: 2
+updates:
+  # Only GitHub's own actions are grouped and may auto-merge. Every other
+  # action, Ward's own reference included, gets its own PR for me to read.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions-first-party:
+        patterns:
+          - "actions/*"
+          - "github/*"
+          - "dependabot/*"
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm # package.json
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: nuget # *.csproj
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dotnet-runtime:
+        patterns:
+          - "Microsoft.AspNetCore.*"
+          - "Microsoft.EntityFrameworkCore*"
+          - "Microsoft.Extensions.*"
+          - "Microsoft.NET.*"
+          - "System.*"
+        update-types: [minor, patch]
+      nuget-minor-patch:
+        patterns: ["*"]
+        exclude-patterns:
+          - "Microsoft.AspNetCore.*"
+          - "Microsoft.EntityFrameworkCore*"
+          - "Microsoft.Extensions.*"
+          - "Microsoft.NET.*"
+          - "System.*"
+        update-types: [minor, patch]
+
+  - package-ecosystem: dotnet-sdk # global.json
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker # Dockerfile
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pip # pyproject.toml or requirements.txt
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      pip-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]

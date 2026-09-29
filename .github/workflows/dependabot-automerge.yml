@@ -1,0 +1,64 @@
+# Auto-merges Dependabot patch and minor updates once every required check
+# passes. Majors, runtime-bound .NET packages, third-party actions, Ward itself,
+# PRs with anyone else's commits and repos without the required check are left
+# for me, and a refusal turns off auto-merge that an earlier run enabled.
+name: Ward auto-merge
+
+on:
+  workflow_call:
+    inputs:
+      required-check:
+        type: string
+        default: ward / gate
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  ASTRO_TELEMETRY_DISABLED: "1"
+  WRANGLER_SEND_METRICS: "false"
+
+concurrency:
+  # Overlapping runs on the same PR could otherwise re-enable auto-merge after
+  # another run's refusal disabled it, or double-merge the same PR.
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - id: meta
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - name: Merge when safe
+        # fetch-metadata fails on an amended or unverified commit; the decision
+        # must still run so it can turn off auto-merge an earlier run enabled.
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEPENDENCIES: ${{ steps.meta.outputs.dependency-names }}
+          REQUIRED_CHECK: ${{ inputs.required-check }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: node "$RUNNER_TEMP/ward/tools/automerge.mjs"
