@@ -211,10 +211,12 @@ Every repo runs Ward's code, so Ward is the most trusted repo I own and gets the
   where this matters most, and they ship an auto-merged bump only with my next merge.
 - **Account:** 2FA stays on; Ward holds no secrets except the audit token, which is read-only. My
   account's commit email for web commits (Settings → Emails) is `malinfossum.dev@proton.me`, so squash
-  merges and web edits pass `identity` and never publish my private address, and "Block command line
-  pushes that expose my email" is on. By the time `identity` sees a commit, it is already public, so the
-  guard against a private address sits before the push: a pre-push hook in loadout refuses commits
-  authored with any address but my dev address (Plan 3).
+  merges and web edits pass `identity`. My private address is not on the GitHub account at all, so
+  nothing GitHub writes can publish it. "Block command line pushes that expose my email" is off: it only
+  exists under "Keep my email addresses private", which forces web commits onto the noreply address.
+  By the time `identity` sees a commit, it is already public, so the guard against a private address
+  sits before the push: a pre-push hook in loadout refuses commits authored with any address but my dev
+  address (Plan 3).
 
 ## Stack modules
 
@@ -427,7 +429,10 @@ Can every part of the circle be tested? Yes, with one link that sits outside Git
   `node_modules`.
 - Axe.Windows activity is low; the WPF path may end on the UI Automation fallback.
 - The ruleset's "require code scanning results" rule was not in the 2026-09-25 verification pass;
-  confirm it is free on public repos before step 1 relies on it.
+  confirm it is free on public repos before step 1 relies on it. On Ward itself it is not applied
+  yet: CodeQL default setup finds no languages while `main` holds only docs, so the rule would block
+  the first code PR forever. I add it once CodeQL has analysed `main` after that merge. A repo with
+  code already on `main` gets the rule from day one.
 - Publishing `@malinfossum/ward-a11y` to npm is a gated step I do or approve at the time.
 
 > Stress-tested 2026-09-28 (skill 2120355) — 28 applied, 2 adapted, 3 decided by me.
