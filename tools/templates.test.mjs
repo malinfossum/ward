@@ -30,7 +30,7 @@ test("the tag ruleset blocks creating, moving and deleting v* tags, admin bypass
 
 test("every Dependabot runtime exclusion is also refused by auto-merge", () => {
   const block = read("templates/dependabot.yml").split("dotnet-runtime:")[1];
-  const patterns = [...block.matchAll(/- "([^"]+)"/g)].map((m) => m[1].replace("*", "Sample"));
+  const patterns = [...block.matchAll(/- "([^"]+)"/g)].map((m) => m[1].replaceAll("*", "Sample"));
   assert.ok(patterns.length >= 5);
   for (const name of patterns) {
     assert.ok(
@@ -51,7 +51,7 @@ test("only GitHub's own actions are grouped", () => {
   const block = read("templates/dependabot.yml")
     .split("actions-first-party:")[1]
     .split("update-types")[0];
-  const patterns = [...block.matchAll(/- "([^"]+)"/g)].map((m) => m[1].replace("*", "sample"));
+  const patterns = [...block.matchAll(/- "([^"]+)"/g)].map((m) => m[1].replaceAll("*", "sample"));
   assert.ok(patterns.length >= 3);
   for (const name of patterns) {
     assert.match(name, FIRST_PARTY_ACTIONS, `${name} is not a first-party action`);
@@ -62,6 +62,7 @@ test("the caller template uses ci.yml@v1, a SHA-pinned auto-merge and a weekly r
   const caller = read("templates/ward.yml");
   assert.match(caller, /malinfossum\/ward\/\.github\/workflows\/ci\.yml@v1/);
   assert.match(caller, /dependabot-automerge\.yml@[0-9a-f]{40} # v\d/);
+  assert.doesNotMatch(caller, /@0{40}/, "auto-merge still pins the pre-release placeholder");
   assert.match(caller, /^\s{2}schedule:/m);
   assert.match(caller, /^\s{2}workflow_dispatch:/m);
 });

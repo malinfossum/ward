@@ -29,5 +29,4 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    # Placeholder until v1.0.0 is tagged: replace the zeros with that tag's full commit SHA.
-    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@0000000000000000000000000000000000000000 # v1.0.0
+    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@2939fee7aac178f0fdbc4ee9505a3e0464314e0c # v1.0.0
