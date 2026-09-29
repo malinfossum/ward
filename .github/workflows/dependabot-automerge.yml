@@ -49,6 +49,9 @@ jobs:
       - id: meta
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
       - name: Merge when safe
+        # fetch-metadata fails on an amended or unverified commit; the decision
+        # must still run so it can turn off auto-merge an earlier run enabled.
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}

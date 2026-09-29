@@ -68,3 +68,12 @@ test("dependabot-automerge.yml sets a per-PR concurrency group that does not can
   assert.match(match[1], /group:.*github\.event\.pull_request\.number/);
   assert.match(match[1], /cancel-in-progress:\s*false/);
 });
+
+// fetch-metadata fails its step on an unverified or non-Dependabot commit, so
+// the decision step must still run and turn off auto-merge an earlier run enabled.
+test("dependabot-automerge.yml runs the decision even when fetch-metadata fails", () => {
+  const text = readFileSync(".github/workflows/dependabot-automerge.yml", "utf8");
+  const step = text.match(/- name: Merge when safe\r?\n((?: {8}.*\r?\n?)+)/);
+  assert.ok(step, "no Merge when safe step found");
+  assert.match(step[1], /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m);
+});

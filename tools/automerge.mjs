@@ -101,7 +101,7 @@ function main() {
   const disableAutoMerge = () => {
     if (autoMergeRequest == null) return;
     const result = spawnSync("gh", ["pr", "merge", "--disable-auto", env.PR_URL], {
-      stdio: "ignore",
+      stdio: "inherit",
     });
     if (result.status !== 0) {
       console.log(`::error::Failed to disable auto-merge on ${env.PR_URL}`);
