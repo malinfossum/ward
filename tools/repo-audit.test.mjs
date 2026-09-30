@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { checkBaseline, checkCaller, checkInputs, parseCaller, WARN_KINDS } from "./repo-audit.mjs";
+import {
+  auditRepo,
+  checkBaseline,
+  checkCaller,
+  checkCanary,
+  checkInputs,
+  checkRuntimes,
+  checkSuppressions,
+  EOL,
+  findSuppressions,
+  parseCaller,
+  targetFrameworks,
+  WARN_KINDS,
+} from "./repo-audit.mjs";
 import { detectStacks, loadStacks } from "./stacks.mjs";
 
 const stacks = loadStacks();
@@ -262,4 +276,160 @@ test("a setting the token cannot read is a token warning, not a pass and not a f
   assert.match(findings[0][1], /Administration \(read\)/);
   assert.match(findings[0][1], /branch rules/);
   assert.ok(WARN_KINDS.has("token"));
+});
+
+const PROPS = `<Project>
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 2026-09-30: transitive via Foo 1.2; fixed upstream in 1.3, bump when released. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-aaaa-bbbb-cccc" />
+
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-dddd-eeee-ffff" /> <!-- 2026-10-01 waiting on Bar -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-gggg-hhhh-iiii" />
+    <!--
+      Two lines, dated 2026-08-01:
+      needed until the .NET 10 bump.
+    -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-jjjj-kkkk-llll" />
+  </ItemGroup>
+</Project>
+`;
+
+test("findSuppressions pairs each suppression with the comment beside or above it", () => {
+  const found = findSuppressions({ "Directory.Build.props": PROPS });
+  assert.deepEqual(
+    found.map((s) => [s.advisory.slice(-19), s.dated]),
+    [
+      ["GHSA-aaaa-bbbb-cccc", true],
+      ["GHSA-dddd-eeee-ffff", true],
+      ["GHSA-gggg-hhhh-iiii", false],
+      ["GHSA-jjjj-kkkk-llll", true],
+    ],
+  );
+  assert.match(found[0].reason, /^2026-09-30: transitive/);
+  assert.equal(found[2].reason, "");
+  assert.match(found[3].reason, /Two lines, dated 2026-08-01: needed until/);
+  assert.equal(found[0].file, "Directory.Build.props");
+});
+
+test("the template's example suppression inside a comment does not count", () => {
+  const template = readFileSync("templates/Directory.Build.props", "utf8");
+  assert.match(template, /NuGetAuditSuppress/, "the template still shows the example");
+  assert.deepEqual(findSuppressions({ "Directory.Build.props": template }), []);
+});
+
+test("an undated suppression is a finding; a dated one is only listed", () => {
+  const findings = checkSuppressions(findSuppressions({ "api/App.csproj": PROPS }));
+  assert.deepEqual(kinds(findings), ["suppression"]);
+  assert.match(
+    findings[0][1],
+    /api\/App\.csproj: .*GHSA-gggg-hhhh-iiii has no dated reason \(YYYY-MM-DD\)/,
+  );
+});
+
+test("the EOL table holds the dates verified on endoflife.date", () => {
+  assert.equal(EOL.dotnet["net8.0"], "2026-11-10");
+  assert.equal(EOL.dotnet["net9.0"], "2026-11-10");
+  assert.equal(EOL.node["20"], "2026-04-30");
+  assert.equal(EOL.node["22"], "2027-04-30");
+});
+
+test("targetFrameworks reads single and multi-target projects", () => {
+  const files = {
+    "a/A.csproj": "<TargetFramework>net8.0</TargetFramework>",
+    "b/B.csproj": "<TargetFrameworks>net8.0;net10.0-windows</TargetFrameworks>",
+  };
+  assert.deepEqual(targetFrameworks(files), [
+    { file: "a/A.csproj", tfm: "net8.0" },
+    { file: "b/B.csproj", tfm: "net8.0" },
+    { file: "b/B.csproj", tfm: "net10.0-windows" },
+  ]);
+});
+
+test("a runtime within 90 days of end of life, or past it, is a finding", () => {
+  const frameworks = [
+    { file: "a/A.csproj", tfm: "net8.0" },
+    { file: "b/B.csproj", tfm: "net10.0-windows" },
+    { file: "c/C.csproj", tfm: "netstandard2.0" },
+    { file: "d/D.csproj", tfm: "net472" },
+  ];
+  const near = checkRuntimes({ frameworks, nodeVersion: "", today: "2026-09-30" });
+  assert.deepEqual(kinds(near), ["runtime"]);
+  assert.match(near[0][1], /a\/A\.csproj: net8\.0 reaches end of life on 2026-11-10/);
+  const past = checkRuntimes({ frameworks, nodeVersion: "", today: "2026-12-01" });
+  assert.match(past[0][1], /reached end of life/);
+  const far = checkRuntimes({ frameworks, nodeVersion: "", today: "2026-06-01" });
+  assert.deepEqual(far, []);
+});
+
+test("the caller's node-version is checked the same way; an unknown major is a finding", () => {
+  const today = "2026-09-30";
+  assert.deepEqual(checkRuntimes({ frameworks: [], nodeVersion: "24", today }), []);
+  const old = checkRuntimes({ frameworks: [], nodeVersion: "20.x", today });
+  assert.match(old[0][1], /Node 20 reached end of life on 2026-04-30/);
+  const soon = checkRuntimes({ frameworks: [], nodeVersion: "22", today: "2027-03-01" });
+  assert.match(soon[0][1], /Node 22 reaches end of life/);
+  const unknown = checkRuntimes({ frameworks: [], nodeVersion: "18", today });
+  assert.match(unknown[0][1], /not in the EOL table/);
+});
+
+test("targetFrameworks dedupes the same runtime in one file", () => {
+  const files = {
+    "a/A.csproj": "<TargetFrameworks>net8.0;net8.0-windows</TargetFrameworks>",
+  };
+  const frameworks = targetFrameworks(files);
+  const findings = checkRuntimes({ frameworks, nodeVersion: "", today: "2026-09-30" });
+  assert.deepEqual(kinds(findings), ["runtime"]);
+  assert.equal(findings.length, 1, "exactly one runtime finding for net8.0");
+  assert.match(findings[0][1], /a\/A\.csproj: net8\.0 reaches end of life/);
+});
+
+test("a healthy canary run passes", () => {
+  const runs = {
+    total_count: 3,
+    workflow_runs: [{ conclusion: "success", updated_at: "2026-09-28T06:00:00Z", html_url: "u" }],
+  };
+  assert.deepEqual(checkCanary(runs, "2026-09-30T08:00:00Z"), []);
+});
+
+test("a red, stale or never-run canary is a finding; a missing canary is only a warning", () => {
+  const red = {
+    workflow_runs: [{ conclusion: "failure", updated_at: "2026-09-29T06:00:00Z", html_url: "u" }],
+  };
+  assert.match(checkCanary(red, "2026-09-30T08:00:00Z")[0][1], /ended failure: u/);
+  const stale = {
+    workflow_runs: [{ conclusion: "success", updated_at: "2026-09-20T06:00:00Z", html_url: "u" }],
+  };
+  assert.match(checkCanary(stale, "2026-09-30T08:00:00Z")[0][1], /10 days old/);
+  assert.match(
+    checkCanary({ total_count: 0, workflow_runs: [] }, "2026-09-30T08:00:00Z")[0][1],
+    /never completed/,
+  );
+  const missing = checkCanary(null, "2026-09-30T08:00:00Z");
+  assert.deepEqual(kinds(missing), ["canary-missing"]);
+  assert.ok(WARN_KINDS.has("canary-missing"));
+  for (const findings of [checkCanary(red, "x"), checkCanary(stale, "2026-09-30T08:00:00Z")]) {
+    assert.ok(!WARN_KINDS.has(findings[0][0]));
+  }
+});
+
+test("auditRepo runs every check over one repo's data", () => {
+  const data = {
+    self: false,
+    tree: ["package.json", "api/App.slnx", "api/App/App.csproj", "api/Directory.Build.props"],
+    caller: CALLER.replace('node: "web" # the site', "node: .").replace(
+      "dotnet: api/App.slnx",
+      "dotnet: api/App.slnx\n      node-version: '20'",
+    ),
+    files: {
+      "api/Directory.Build.props": PROPS,
+      "api/App/App.csproj": "<TargetFramework>net8.0</TargetFramework>",
+    },
+    baseline,
+  };
+  const { findings, suppressions } = auditRepo(data, { stacks, today: "2026-09-30" });
+  assert.deepEqual(kinds(findings).sort(), ["runtime", "runtime", "suppression"]);
+  assert.equal(suppressions.length, 4);
 });

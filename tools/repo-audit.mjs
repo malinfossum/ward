@@ -4,6 +4,7 @@
 // and Ward's canary is alive. Each check is a pure function over fetched data
 // that returns [kind, message] findings; main() only fetches and reports.
 import { requiredChecksFrom } from "./automerge.mjs";
+import { detectStacks } from "./stacks.mjs";
 
 export const WARD = "malinfossum/ward";
 export const REQUIRED_USES = "malinfossum/ward/.github/workflows/ci.yml@v1";
@@ -194,4 +195,163 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
     ]);
   }
   return findings;
+}
+
+export const CANARY = "canary.yml";
+export const MAX_AGE_DAYS = 8;
+export const EOL_WINDOW_DAYS = 90;
+
+// Verified on endoflife.date on 2026-09-30. Add a line when a runtime ships.
+export const EOL = {
+  dotnet: { "net8.0": "2026-11-10", "net9.0": "2026-11-10", "net10.0": "2028-11-14" },
+  node: { 20: "2026-04-30", 22: "2027-04-30", 24: "2028-04-30", 26: "2029-04-30" },
+};
+
+const DATED = /\b\d{4}-\d{2}-\d{2}\b/;
+const COMMENT = /<!--([\s\S]*?)-->/;
+
+// The comment block that ends on the nearest non-blank line above `index`.
+// Only a block that is comment from its first line to its last counts: a
+// suppression with its own inline comment on the line above is not a reason
+// for the next one.
+function commentAbove(lines, index) {
+  let end = index - 1;
+  while (end >= 0 && lines[end].trim() === "") end--;
+  if (end < 0 || !lines[end].trim().endsWith("-->")) return "";
+  let start = end;
+  while (start >= 0 && !lines[start].trim().startsWith("<!--")) {
+    if (lines[start].includes("<!--")) return "";
+    start--;
+  }
+  if (start < 0) return "";
+  return lines
+    .slice(start, end + 1)
+    .join(" ")
+    .replace(/<!--|-->/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Every <NuGetAuditSuppress> outside a comment, with the reason beside it: a
+// comment on the same line, or the comment block directly above. The template
+// shows an example inside a comment, which must not count, so matching runs on
+// a copy with comment contents blanked (line structure kept).
+export function findSuppressions(files) {
+  const found = [];
+  for (const [file, text] of Object.entries(files)) {
+    const lines = text.split(/\r?\n/);
+    const blanked = text
+      .replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\n]/g, " "))
+      .split(/\r?\n/);
+    blanked.forEach((line, i) => {
+      const match = line.match(/<NuGetAuditSuppress\s+Include="([^"]+)"/);
+      if (!match) return;
+      const inline = lines[i].match(COMMENT);
+      const reason = inline ? inline[1].replace(/\s+/g, " ").trim() : commentAbove(lines, i);
+      found.push({ file, advisory: match[1], reason, dated: DATED.test(reason) });
+    });
+  }
+  return found;
+}
+
+export function checkSuppressions(suppressions) {
+  return suppressions
+    .filter((s) => !s.dated)
+    .map((s) => ["suppression", `${s.file}: ${s.advisory} has no dated reason (YYYY-MM-DD).`]);
+}
+
+export function targetFrameworks(files) {
+  const found = [];
+  for (const [file, text] of Object.entries(files)) {
+    for (const match of text.matchAll(/<TargetFrameworks?>([^<]+)<\/TargetFrameworks?>/g)) {
+      for (const tfm of match[1].split(";")) {
+        if (tfm.trim()) found.push({ file, tfm: tfm.trim() });
+      }
+    }
+  }
+  return found;
+}
+
+const DAY = 86_400_000;
+const daysUntil = (date, today) => Math.round((Date.parse(date) - Date.parse(today)) / DAY);
+
+function eolFinding(label, eol, today) {
+  const days = daysUntil(eol, today);
+  if (days > EOL_WINDOW_DAYS) return null;
+  return ["runtime", `${label} ${days < 0 ? "reached" : "reaches"} end of life on ${eol}.`];
+}
+
+// frameworks from targetFrameworks(); nodeVersion is the caller's node-version
+// input ("" when the node module is off). Only netX.Y runtimes are dated;
+// netstandard and .NET Framework monikers are skipped. An OS suffix
+// (net10.0-windows) is the same runtime.
+export function checkRuntimes({ frameworks, nodeVersion, today }) {
+  const findings = [];
+  const seen = new Set();
+  for (const { file, tfm } of frameworks) {
+    const runtime = tfm.split("-")[0];
+    if (!/^net\d+\.\d+$/.test(runtime) || seen.has(`${file}:${runtime}`)) continue;
+    seen.add(`${file}:${runtime}`);
+    const eol = EOL.dotnet[runtime];
+    if (!eol) {
+      findings.push([
+        "runtime",
+        `${file}: ${runtime} is not in the EOL table; add it to tools/repo-audit.mjs.`,
+      ]);
+      continue;
+    }
+    const finding = eolFinding(`${file}: ${runtime}`, eol, today);
+    if (finding) findings.push(finding);
+  }
+  if (nodeVersion) {
+    const major = nodeVersion.match(/^v?(\d+)/)?.[1] ?? "";
+    const eol = EOL.node[major];
+    if (!eol) {
+      findings.push([
+        "runtime",
+        `node-version ${nodeVersion} is not in the EOL table; add it to tools/repo-audit.mjs.`,
+      ]);
+    } else {
+      const finding = eolFinding(`Node ${major}`, eol, today);
+      if (finding) findings.push(finding);
+    }
+  }
+  return findings;
+}
+
+// runs: null when Ward has no canary.yml yet (the API answers 404), else the
+// workflow-runs response for the latest completed run. The canary arrives in
+// Plan 5; until then a missing workflow is a warning, not a failure.
+export function checkCanary(runs, now) {
+  if (runs === null) return [["canary-missing", `No ${CANARY} in ${WARD} yet (Plan 5).`]];
+  const run = runs.workflow_runs?.[0];
+  if (!run) return [["canary", `${CANARY} has never completed a run.`]];
+  if (run.conclusion !== "success") {
+    return [["canary", `The latest canary run ended ${run.conclusion}: ${run.html_url}`]];
+  }
+  const days = Math.floor((Date.parse(now) - Date.parse(run.updated_at)) / DAY);
+  if (days > MAX_AGE_DAYS) {
+    return [
+      [
+        "canary",
+        `The latest canary run is ${days} days old (${run.updated_at}); GitHub may have disabled the schedule.`,
+      ],
+    ];
+  }
+  return [];
+}
+
+// One repo, all checks. tree: blob paths on the default branch; caller: the
+// text of .github/workflows/ward.yml or null; files: Directory.Build.props and
+// .csproj texts by path; baseline: see checkBaseline; self: the repo is Ward.
+export function auditRepo({ tree, caller, files, baseline, self }, { stacks, today }) {
+  const findings = [...checkBaseline(baseline), ...checkCaller(caller, { self })];
+  const parsed = caller == null ? null : parseCaller(caller);
+  const inputs = parsed?.inputs ?? null;
+  findings.push(...checkInputs(inputs, detectStacks(tree, stacks), tree));
+  const suppressions = findSuppressions(files);
+  findings.push(...checkSuppressions(suppressions));
+  const nodeVersion = inputs?.node ? inputs["node-version"] || "24" : "";
+  findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
+  return { findings, suppressions };
 }
