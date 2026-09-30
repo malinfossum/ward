@@ -33,6 +33,12 @@ only; third-party actions wait for review), secret scanning with push protection
 ruleset on `main`. The full standard is in
 [the design spec](docs/specs/2026-09-25-ci-standard-design.md).
 
+Two more checks live outside `ci.yml`. [`repo-hygiene.yml`](.github/workflows/repo-hygiene.yml) is a
+reusable workflow that checks a repo's public face against its README ([docs](docs/repo-hygiene.md)).
+[`repo-audit.yml`](.github/workflows/repo-audit.yml) sweeps every repo I own each Monday: baseline
+settings, caller on `@v1`, caller inputs against the repo's stacks, dated NuGet audit suppressions,
+runtimes near end of life, and the canary ([docs](docs/repo-audit.md)).
+
 ## Develop
 
 ```bash
@@ -46,7 +52,9 @@ npm run lint
 
 | Path | What |
 |---|---|
-| `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, Ward's own `ward.yml` |
+| `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml`, Ward's own `ward.yml` |
+| `stacks.json` | Which files mean which module, read by the audit and by the `ward` skill |
+| `docs/` | The spec, the plans, `repo-hygiene.md` and `repo-audit.md` |
 | `tools/` | The scripts each job runs, with their unit tests |
 | `templates/` | What a repo copies: caller, Dependabot config, rulesets, `Directory.Build.props` |
-| `fixtures/`, `tests/` | Known-good and known-broken projects and the tests that run them |
+| `fixtures/`, `tests/` | Known-good and known-broken projects (the C# ones are xUnit) and the tests that run them |

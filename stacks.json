@@ -1,0 +1,21 @@
+{
+  "$comment": "Detection rules for Ward's stack modules. A path matches a module when its basename equals a pattern, or ends with the pattern's suffix when the pattern starts with `*`, and no ignore prefix appears as a path segment. status shipped: ci.yml has the module and the caller input named here must be set. status planned: files are reported as an uncovered stack until the module ships (Plan 6). Plan 3's skill reads the same file to write a caller.",
+  "ignore": ["node_modules/", "bin/", "obj/", ".git/"],
+  "modules": [
+    { "name": "node", "input": "node", "status": "shipped", "files": ["package.json"] },
+    {
+      "name": "dotnet",
+      "input": "dotnet",
+      "status": "shipped",
+      "files": ["*.sln", "*.slnx", "*.csproj"]
+    },
+    {
+      "name": "python",
+      "input": "",
+      "status": "planned",
+      "files": ["pyproject.toml", "requirements.txt"]
+    },
+    { "name": "powershell", "input": "", "status": "planned", "files": ["*.ps1", "*.psm1"] },
+    { "name": "docker", "input": "", "status": "planned", "files": ["Dockerfile", "*.Dockerfile"] }
+  ]
+}
