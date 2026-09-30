@@ -489,6 +489,13 @@ test("canaryFindings: only a 404 means no canary; 401 and 403 are a token findin
   assert.deepEqual(canaryFindings(200, runs, NOW), checkCanary(runs, NOW));
 });
 
+test("a canary that cannot be read fails the run on my own repo", () => {
+  const own = warnKindsFor(WARD.split("/")[0], {});
+  assert.equal(hardCount(canaryFindings(403, null, NOW), own), 1);
+  assert.equal(hardCount(canaryFindings(401, null, NOW), own), 1);
+  assert.equal(hardCount(canaryFindings(404, null, NOW), own), 0);
+});
+
 test("the suppression table redacts email addresses from the public reason", () => {
   assert.equal(
     redactEmails("ask a.b+c@proton.me or x@y.co.uk today"),

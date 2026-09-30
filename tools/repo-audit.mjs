@@ -548,8 +548,11 @@ async function main(argv) {
     read,
   );
   const canaryResult = canaryFindings(canary.status, canary.body, new Date().toISOString());
-  summary += report(`${WARD} canary`, canaryResult, level);
-  failures += hardCount(canaryResult);
+  // Ward is my own repo: a canary I cannot read fails the run, and --warn-kinds
+  // never softens it.
+  const ownWarn = warnKindsFor(WARD.split("/")[0], env);
+  summary += report(`${WARD} canary`, canaryResult, level, ownWarn);
+  failures += hardCount(canaryResult, ownWarn);
 
   if (suppressions.length) {
     summary +=
