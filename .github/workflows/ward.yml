@@ -48,3 +48,8 @@ jobs:
           dotnet-version: 10.0.x
       - run: npm ci
       - run: npm run test:fixtures
+
+  hygiene:
+    uses: ./.github/workflows/repo-hygiene.yml
+    with:
+      mode: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 'warn' || 'strict' }}

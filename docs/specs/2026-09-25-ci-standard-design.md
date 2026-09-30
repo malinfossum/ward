@@ -60,6 +60,23 @@ because `npm` needs a shell on Windows. The `fixtures` job in `ward.yml`, which 
 against the fixture repos, carries a 30-minute timeout even though it is neither a `node` nor a `dotnet`
 job.
 
+**Deviations recorded 2026-09-30 (Plan 2):** `stacks.json` arrived with the audit, one plan early,
+because the caller-input comparison needs the detection rules; python, powershell and docker are
+listed there as `planned` and reported as `uncovered` warnings until Plan 6. The hygiene check
+stays a reusable workflow of its own with its own caller file, so `templates/ward.yml` is unchanged;
+folding it into the caller is a Plan 5 rollout question. The audit token is a fine-grained token
+with Administration (read) only; every other read is public and goes through the Actions token, so
+the secret on Ward can read settings, never code. A fine-grained token covers one owner: org repos
+get their settings read only through `AUDIT_TOKEN_ROOKDEX` and `AUDIT_TOKEN_WENDHQ`, and without
+those the audit reports a `token` warning for them, while a `token` finding on my own repos fails
+the run. Until Plan 5 rolls the caller out, `repo-audit.yml` passes `--warn-kinds caller`, so a
+missing caller is a warning and a red audit means a baseline, ruleset or other drift, not the
+rollout itself; Plan 5 removes the flag. Ward is MIT-licensed, the same text as workbench, so the
+code that moved in keeps the licence it left with. `stacks.json` carries each module's detection
+files and the caller input it maps to; the scripts a module requires live in that module's docs, not
+in `stacks.json`. Spindle's `commit-identity.yml` retires in Plan 5, when the Ward caller replaces
+it, not in this plan.
+
 ## The caller
 
 The only CI file a repo carries:
@@ -209,11 +226,12 @@ Every repo runs Ward's code, so Ward is the most trusted repo I own and gets the
   enough for it to be caught upstream. Auto-merged changes still pass tests and CodeQL, and third-party
   actions never auto-merge. Repos that deploy on merge to `main` (Ignite, Kenaz, Rookdex) are the ones
   where this matters most, and they ship an auto-merged bump only with my next merge.
-- **Account:** 2FA stays on; Ward holds no secrets except the audit token, which is read-only. My
-  account's commit email for web commits (Settings → Emails) is `malinfossum.dev@proton.me`, so squash
-  merges and web edits pass `identity`. My private address is not on the GitHub account at all, so
-  nothing GitHub writes can publish it. "Block command line pushes that expose my email" is off: it only
-  exists under "Keep my email addresses private", which forces web commits onto the noreply address.
+- **Account:** 2FA stays on; Ward holds no secrets except `WARD_AUDIT_TOKEN`, which is read-only
+  (Administration read, nothing else). My account's commit email for web commits (Settings → Emails)
+  is `malinfossum.dev@proton.me`, so squash merges and web edits pass `identity`. My private address
+  is not on the GitHub account at all, so nothing GitHub writes can publish it. "Block command line
+  pushes that expose my email" is off: it only exists under "Keep my email addresses private", which
+  forces web commits onto the noreply address.
   By the time `identity` sees a commit, it is already public, so the guard against a private address
   sits before the push: a pre-push hook in loadout refuses commits authored with any address but my dev
   address (Plan 3).
@@ -340,7 +358,10 @@ it works, it joins the `dotnet` module; if not, the fallback is UI Automation te
 its `repo-hygiene.yml` for one release as a forwarder that calls Ward, so nothing breaks mid-move. Then
 the five consumer repos (hugin, malinfossum, profile-dashboard, spindle, varde) and the six scaffolds
 switch to the Ward caller, and the forwarder is removed. The weekly audit needs the
-`PROFILE_README_TOKEN` secret set on Ward — I set that by hand. Spindle's `commit-identity.yml` is
+`WARD_AUDIT_TOKEN` secret set on Ward, which I set by hand: a new fine-grained token with
+Administration (read) on all my repositories and nothing else. It is not named
+`PROFILE_README_TOKEN` as first planned: that name holds a write token on profile-dashboard, and
+sharing it invited setting the wrong one. Spindle's `commit-identity.yml` is
 retired in favour of the `identity` module, which allows `dependabot[bot]`.
 
 ## Testing Ward itself
