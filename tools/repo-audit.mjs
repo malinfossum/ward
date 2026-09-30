@@ -35,8 +35,9 @@ const unquote = (value) =>
 // its `with:` inputs, and the ref of the auto-merge job when there is one. The
 // file is small and written by me or the skill, so a line-based parse is
 // enough. A caller too odd to parse reads as absent, never as a caller with
-// wrong inputs: a `with:` before `uses:` or in flow style is such a caller, and
-// "caller missing" is a better report than a false "input is empty".
+// wrong inputs: a `with:` before `uses:`, in flow style, or with a block
+// scalar input (`|` or `>`) is such a caller, and "caller missing" is a better
+// report than a false "input is empty".
 export function parseCaller(text) {
   const lines = text.split(/\r?\n/);
   const at = lines.findIndex((line) =>
@@ -66,7 +67,9 @@ export function parseCaller(text) {
       if (skippable(line)) continue;
       if (indentOf(line) <= indent) break;
       const match = line.match(/^\s*([\w-]+):\s*(.*)$/);
-      if (match) inputs[match[1]] = unquote(match[2]);
+      if (!match) continue;
+      if (/^[|>]/.test(match[2].trim())) return null;
+      inputs[match[1]] = unquote(match[2]);
     }
   }
   const automergeLine = lines.find((line) => /^\s*uses:\s*\S*dependabot-automerge\.yml/.test(line));
@@ -118,9 +121,12 @@ export function checkInputs(inputs, detected, paths) {
   }
   if (!inputs) return findings;
   const have = new Set(paths);
+  // `./web` and `web` are the same path; `./` alone is the root.
+  const bare = (input) => input.replace(/^\.\//, "") || ".";
   const node = inputs.node ?? "";
   if (node) {
-    const manifest = node === "." ? "package.json" : `${node.replace(/\/$/, "")}/package.json`;
+    const dir = bare(node);
+    const manifest = dir === "." ? "package.json" : `${dir.replace(/\/$/, "")}/package.json`;
     if (!have.has(manifest)) {
       findings.push([
         "inputs",
@@ -129,8 +135,8 @@ export function checkInputs(inputs, detected, paths) {
     }
   }
   const dotnet = inputs.dotnet ?? "";
-  if (dotnet && dotnet !== ".") {
-    const target = dotnet.replace(/\/$/, "");
+  if (dotnet && bare(dotnet) !== ".") {
+    const target = bare(dotnet).replace(/\/$/, "");
     const exists = have.has(target) || paths.some((path) => path.startsWith(`${target}/`));
     if (!exists) {
       findings.push(["inputs", `dotnet points at ${dotnet}, which is not on the default branch.`]);
@@ -140,10 +146,13 @@ export function checkInputs(inputs, detected, paths) {
 }
 
 // Each field is the API's answer, or null when the token could not read it
-// (401/403, or anything but 200 for the branch rules). null is a warning,
+// (no admin read, which fetchRepoData decides once per repo, a 401/403, or
+// anything but 200 for the branch rules). null is a warning,
 // never a pass: a false green here would hide exactly what the audit exists
-// to find, and an empty rule list in its place would be a false red.
-export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning, rules }) {
+// to find, and an empty rule list in its place would be a false red. unread
+// is set when no admin token exists for the owner: then that one sentence,
+// naming the missing secret, is the repo's only token finding.
+export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning, rules, unread }) {
   const findings = [];
   const unreadable = [];
   if (alerts == null) unreadable.push("Dependabot alerts");
@@ -191,7 +200,8 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
       ]);
     }
   }
-  if (unreadable.length) {
+  if (unread) findings.push(["token", unread]);
+  else if (unreadable.length) {
     findings.push([
       "token",
       `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
@@ -205,9 +215,25 @@ export const MAX_AGE_DAYS = 8;
 export const EOL_WINDOW_DAYS = 90;
 
 // Verified on endoflife.date on 2026-09-30. Add a line when a runtime ships.
+// Retired runtimes stay listed, so they read as past end of life instead of
+// "not in the table".
 export const EOL = {
-  dotnet: { "net8.0": "2026-11-10", "net9.0": "2026-11-10", "net10.0": "2028-11-14" },
-  node: { 20: "2026-04-30", 22: "2027-04-30", 24: "2028-04-30", 26: "2029-04-30" },
+  dotnet: {
+    "net5.0": "2022-05-10",
+    "net6.0": "2024-11-12",
+    "net7.0": "2024-05-14",
+    "net8.0": "2026-11-10",
+    "net9.0": "2026-11-10",
+    "net10.0": "2028-11-14",
+  },
+  node: {
+    16: "2023-09-11",
+    18: "2025-04-30",
+    20: "2026-04-30",
+    22: "2027-04-30",
+    24: "2028-04-30",
+    26: "2029-04-30",
+  },
 };
 
 const DATED = /\b\d{4}-\d{2}-\d{2}\b/;
@@ -362,15 +388,21 @@ export function auditRepo({ tree, caller, files, baseline, self }, { stacks, tod
 const API = "https://api.github.com";
 
 const auditKey = (owner) => `AUDIT_TOKEN_${owner.toUpperCase().replaceAll("-", "_")}`;
+const isMine = (owner) => owner.toLowerCase() === WARD.split("/")[0];
 
-// The admin token for an owner. A fine-grained token is scoped to one resource
-// owner, so an org can carry its own in AUDIT_TOKEN_<OWNER>. Without one,
-// WARD_AUDIT_TOKEN is tried and the settings reads report a token warning for
-// that org's repos. Everything else the audit reads is public and goes through
-// the Actions token, so the admin token needs Administration (read) and
-// nothing else: if it leaks, it can read settings, never code.
+// The secret that holds the admin token for an owner, named when it is missing.
+const adminSecret = (owner) => (isMine(owner) ? "WARD_AUDIT_TOKEN" : auditKey(owner));
+
+// The admin token for an owner, or "" when there is none. A fine-grained token
+// is scoped to one resource owner, so an org gets its settings read only
+// through its own AUDIT_TOKEN_<OWNER>, and WARD_AUDIT_TOKEN covers my own
+// repos. Never the Actions token: without an admin token the settings are not
+// read at all, and the finding names the missing secret. Everything else the
+// audit reads is public and goes through the Actions token, so the admin token
+// needs Administration (read) and nothing else: if it leaks, it can read
+// settings, never code.
 export function tokenFor(owner, env) {
-  return env[auditKey(owner)] || env.WARD_AUDIT_TOKEN || env.GITHUB_TOKEN || "";
+  return env[auditKey(owner)] || (isMine(owner) ? env.WARD_AUDIT_TOKEN : "") || "";
 }
 
 // Where admin read is promised (my own repos, and an org with its own token),
@@ -378,7 +410,7 @@ export function tokenFor(owner, env) {
 // settings checks into a silent pass. Another org without a token keeps the
 // warning.
 export function expectsAdminRead(owner, env) {
-  return owner.toLowerCase() === WARD.split("/")[0] || Boolean(env[auditKey(owner)]);
+  return isMine(owner) || Boolean(env[auditKey(owner)]);
 }
 
 // The warning set for one owner: WARN_KINDS, minus token where admin read is
@@ -409,9 +441,16 @@ export async function request(path, token) {
 
 const PROPS_OR_PROJECT = /(^|\/)(Directory\.Build\.props|[^/]+\.csproj)$/;
 
-// admin: the token for the four settings endpoints; read: the token for the
-// public reads (tree, caller, project files, branch rules). stacks supplies the
-// ignore prefixes, the same ones stack detection skips.
+// admin: the token for the settings endpoints, "" when the owner has none;
+// read: the token for the public reads (tree, caller, project files, branch
+// rules). stacks supplies the ignore prefixes, the same ones stack detection
+// skips.
+//
+// Admin readability is decided once: meta.security_and_analysis is present
+// only when the token that fetched meta has admin access, and main fetches
+// meta with the admin token. Without it every settings field is null
+// (unreadable) and the settings endpoints are not called, because their 404
+// would be ambiguous. With it, a 404 on either Dependabot endpoint means off.
 export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
   const repo = meta.full_name;
   const branch = encodeURIComponent(meta.default_branch);
@@ -429,25 +468,34 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
     const text = await fetchFile(repo, path, read);
     if (text) files[path] = text;
   }
-  const [updates, alerts, codeScanning, rules] = await Promise.all([
-    request(`/repos/${repo}/automated-security-fixes`, admin),
-    request(`/repos/${repo}/vulnerability-alerts`, admin),
-    request(`/repos/${repo}/code-scanning/default-setup`, admin),
-    request(`/repos/${repo}/rules/branches/${branch}`, read),
-  ]);
   const readable = (res) => (res.status === 200 ? res.body : null);
+  const rules = readable(await request(`/repos/${repo}/rules/branches/${branch}`, read));
+  let settings = { securityUpdates: null, alerts: null, analysis: null, codeScanning: null };
+  if (admin && meta.security_and_analysis != null) {
+    const [updates, alerts, codeScanning] = await Promise.all([
+      request(`/repos/${repo}/automated-security-fixes`, admin),
+      request(`/repos/${repo}/vulnerability-alerts`, admin),
+      request(`/repos/${repo}/code-scanning/default-setup`, admin),
+    ]);
+    settings = {
+      securityUpdates:
+        updates.status === 404 ? { enabled: false, paused: false } : readable(updates),
+      alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
+      analysis: meta.security_and_analysis,
+      codeScanning: readable(codeScanning),
+    };
+  }
+  const unread = admin
+    ? {}
+    : {
+        unread: `${adminSecret(repo.split("/")[0])} is not set, so the settings of ${repo} were not read.`,
+      };
   return {
     self: repo === WARD,
     tree: paths,
     caller,
     files,
-    baseline: {
-      securityUpdates: readable(updates),
-      alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
-      analysis: meta.security_and_analysis ?? null,
-      codeScanning: readable(codeScanning),
-      rules: readable(rules),
-    },
+    baseline: { ...settings, rules, ...unread },
   };
 }
 
@@ -468,9 +516,15 @@ export const redactEmails = (text) => text.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g
 export const suppressionRow = (s) =>
   `| ${s.repo} | ${s.file} | ${s.advisory} | ${redactEmails(s.reason || "(none)")} |\n`;
 
+// GitHub's escaping for workflow command data. A message carries text from API
+// errors and repo files, and a raw newline in it would start a new command
+// (::stop-commands:: and the like) on the next line.
+const escapeData = (text) =>
+  text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+
 // level: "error" fails the job (strict), "warning" never does, "" prints
 // plainly (archived repos). warnKinds stay warnings in every mode.
-function report(name, findings, level, warnKinds = WARN_KINDS) {
+export function report(name, findings, level, warnKinds = WARN_KINDS) {
   if (!findings.length) {
     console.log(`OK    ${name}`);
     return "";
@@ -479,8 +533,11 @@ function report(name, findings, level, warnKinds = WARN_KINDS) {
   const lines = [`### ${name}`, ""];
   for (const [kind, message] of findings) {
     const shown = level && warnKinds.has(kind) ? "warning" : level;
-    console.log(shown ? `::${shown}::${name} [${kind}] ${message}` : `  [${kind}] ${message}`);
-    lines.push(`- **${kind}**: ${message}`);
+    const flat = message.replace(/\r?\n|\r/g, " ");
+    console.log(
+      shown ? `::${shown}::${escapeData(`${name} [${kind}] ${message}`)}` : `  [${kind}] ${flat}`,
+    );
+    lines.push(`- **${kind}**: ${flat}`);
   }
   lines.push("");
   return lines.join("\n");
@@ -489,7 +546,17 @@ function report(name, findings, level, warnKinds = WARN_KINDS) {
 export const hardCount = (findings, warnKinds = WARN_KINDS) =>
   findings.filter(([kind]) => !warnKinds.has(kind)).length;
 
-async function main(argv) {
+// One API failure is a finding where it happened, never the end of the run:
+// "GitHub API 502 on ..." reads as "HTTP 502", a network failure as itself.
+const httpDetail = (error) => {
+  const status = error.message.match(/^GitHub API (\d+)/)?.[1];
+  return status ? `HTTP ${status}` : error.message;
+};
+
+// The whole sweep. Returns the summary and the count of hard findings; main
+// writes the one and turns the other into the exit code, so a test can run the
+// sweep against a stubbed fetch without touching the process.
+export async function runAudit(argv, env) {
   const arg = (flag, fallback = "") => {
     const i = argv.indexOf(flag);
     return i === -1 ? fallback : argv[i + 1];
@@ -506,7 +573,6 @@ async function main(argv) {
     .split(",")
     .map((kind) => kind.trim())
     .filter(Boolean);
-  const env = process.env;
   // Public reads: the Actions token in CI, `gh auth token` locally.
   const read = env.GITHUB_TOKEN || "";
   const stacks = loadStacks();
@@ -519,13 +585,25 @@ async function main(argv) {
   for (const owner of owners) {
     const admin = tokenFor(owner, env);
     const warnKinds = warnKindsFor(owner, env, extraWarn);
-    for (const listed of await listRepos([owner], read)) {
+    let listedRepos;
+    try {
+      listedRepos = await listRepos([owner], read);
+    } catch (error) {
+      const findings = [["error", `${owner}: could not list repos (${httpDetail(error)})`]];
+      summary += report(owner, findings, level, warnKinds);
+      failures += 1;
+      continue;
+    }
+    for (const listed of listedRepos) {
       if (listed.archived && !includeArchived) continue;
       // One repo's API error is that repo's finding, so the others still
-      // report and the summary survives; the run still fails on it.
+      // report and the summary survives; the run still fails on it, unless
+      // the repo is archived.
       try {
-        // The list omits security_and_analysis; the single-repo call has it.
-        const meta = (await request(`/repos/${listed.full_name}`, admin)).body ?? listed;
+        // The list omits security_and_analysis; the single-repo call has it
+        // when the token has admin read, which is how fetchRepoData tells.
+        // Without an admin token the read token fetches it instead.
+        const meta = (await request(`/repos/${listed.full_name}`, admin || read)).body ?? listed;
         const data = await fetchRepoData(meta, { admin, read, stacks });
         const result = auditRepo(data, { stacks, today });
         suppressions.push(...result.suppressions.map((s) => ({ repo: meta.full_name, ...s })));
@@ -537,17 +615,28 @@ async function main(argv) {
           failures += hardCount(result.findings, warnKinds);
         }
       } catch (error) {
-        summary += report(listed.full_name, [["error", error.message]], level, warnKinds);
-        failures += 1;
+        const findings = [["error", error.message]];
+        if (listed.archived) {
+          // Archived repos never fail the run, not even when they cannot be read.
+          archivedSummary += report(`${listed.full_name} (archived)`, findings, "warning");
+        } else {
+          summary += report(listed.full_name, findings, level, warnKinds);
+          failures += 1;
+        }
       }
     }
   }
 
-  const canary = await request(
-    `/repos/${WARD}/actions/workflows/${CANARY}/runs?per_page=1&status=completed`,
-    read,
-  );
-  const canaryResult = canaryFindings(canary.status, canary.body, new Date().toISOString());
+  let canaryResult;
+  try {
+    const canary = await request(
+      `/repos/${WARD}/actions/workflows/${CANARY}/runs?per_page=1&status=completed`,
+      read,
+    );
+    canaryResult = canaryFindings(canary.status, canary.body, new Date().toISOString());
+  } catch (error) {
+    canaryResult = [["error", `Cannot read canary runs on ${WARD}: ${error.message}`]];
+  }
   // Ward is my own repo: a canary I cannot read fails the run, and --warn-kinds
   // never softens it.
   const ownWarn = warnKindsFor(WARD.split("/")[0], env);
@@ -563,6 +652,12 @@ async function main(argv) {
   if (archivedSummary) {
     summary += `\n<details><summary>Archived repos (read-only, unarchive to fix)</summary>\n\n${archivedSummary}</details>\n`;
   }
+  return { summary, failures, strict };
+}
+
+async function main(argv) {
+  const env = process.env;
+  const { summary, failures, strict } = await runAudit(argv, env);
   if (env.GITHUB_STEP_SUMMARY && summary) {
     appendFileSync(env.GITHUB_STEP_SUMMARY, `## Repo audit\n\n${summary}`);
   }

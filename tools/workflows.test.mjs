@@ -138,10 +138,25 @@ test("every reusable workflow fetches Ward's tools at its own commit", () => {
   assert.equal(checked, 3, "ci.yml, dependabot-automerge.yml and repo-hygiene.yml");
 });
 
+// secrets.NAME, secrets['NAME'] and a reusable call with `secrets: inherit`
+// all hand a secret to the job.
+const READS_SECRET = /secrets(\.|\[|:\s*inherit)/;
+
+test("the secret detector sees every way a workflow can read a secret", () => {
+  for (const text of [
+    "token: secrets.WARD_AUDIT_TOKEN",
+    "token: secrets['WARD_AUDIT_TOKEN']",
+    "    secrets: inherit",
+  ]) {
+    assert.match(text, READS_SECRET);
+  }
+  assert.doesNotMatch("# this workflow reads no secrets", READS_SECRET);
+});
+
 test("a workflow that reads a secret runs only on a schedule or by hand", () => {
   let checked = 0;
   for (const file of workflows) {
-    if (!/secrets\./.test(readWorkflow(file))) continue;
+    if (!READS_SECRET.test(readWorkflow(file))) continue;
     checked++;
     const on = readWorkflow(file).match(/^on:\r?\n((?: {2}.*\r?\n?)+)/m)?.[1] ?? "";
     const triggers = [...on.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]).sort();

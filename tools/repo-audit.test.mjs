@@ -17,7 +17,9 @@ import {
   hardCount,
   parseCaller,
   redactEmails,
+  report,
   request,
+  runAudit,
   suppressionRow,
   targetFrameworks,
   tokenFor,
@@ -25,6 +27,7 @@ import {
   WARN_KINDS,
   warnKindsFor,
 } from "./repo-audit.mjs";
+import { fetchFile, listRepos } from "./repo-hygiene.mjs";
 import { detectStacks, loadStacks } from "./stacks.mjs";
 
 const stacks = loadStacks();
@@ -80,6 +83,16 @@ test("a caller the line parser cannot read is absent, not a caller with wrong in
     "jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with: { node: web }\n";
   assert.equal(parseCaller(flow), null);
   assert.deepEqual(kinds(checkCaller(flow, { self: false })), ["caller"]);
+});
+
+test("a block scalar input makes the caller unreadable, the same as flow style", () => {
+  for (const marker of ["|", ">-"]) {
+    const text = `jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      node: ${marker}\n        web\n`;
+    assert.equal(parseCaller(text), null, marker);
+  }
+  const quoted =
+    'jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      node: "|web"\n';
+  assert.deepEqual(parseCaller(quoted).inputs, { node: "|web" });
 });
 
 test("a comment line inside the with block does not end it", () => {
@@ -159,6 +172,18 @@ test("an input that points at nothing on the default branch is a finding", () =>
   assert.match(findings[0][1], /site\/package\.json is not on the default branch/);
   assert.match(findings[1][1], /src\/Old\.slnx, which is not on the default branch/);
   assert.deepEqual(checkInputs({ node: "web", dotnet: "src/App" }, detected, paths), []);
+});
+
+test("a leading ./ in an input is the same path as without it", () => {
+  const paths = ["web/package.json", "src/App/App.csproj"];
+  const detected = detectStacks(paths, stacks);
+  assert.deepEqual(checkInputs({ node: "./web", dotnet: "./src/App" }, detected, paths), []);
+  const rootPaths = ["package.json"];
+  const root = detectStacks(rootPaths, stacks);
+  assert.deepEqual(checkInputs({ node: "./" }, root, rootPaths), []);
+  const findings = checkInputs({ node: "./site", dotnet: "./src/App" }, detected, paths);
+  assert.deepEqual(kinds(findings), ["inputs"]);
+  assert.match(findings[0][1], /node points at \.\/site, but site\/package\.json is not/);
 });
 
 test("a planned stack is an uncovered warning, with or without a caller", () => {
@@ -381,8 +406,16 @@ test("the caller's node-version is checked the same way; an unknown major is a f
   assert.match(old[0][1], /Node 20 reached end of life on 2026-04-30/);
   const soon = checkRuntimes({ frameworks: [], nodeVersion: "22", today: "2027-03-01" });
   assert.match(soon[0][1], /Node 22 reaches end of life/);
-  const unknown = checkRuntimes({ frameworks: [], nodeVersion: "18", today });
+  const unknown = checkRuntimes({ frameworks: [], nodeVersion: "12", today });
   assert.match(unknown[0][1], /not in the EOL table/);
+});
+
+test("a retired runtime reads as past end of life, not as missing from the table", () => {
+  const frameworks = [{ file: "a/A.csproj", tfm: "net6.0" }];
+  const dotnet = checkRuntimes({ frameworks, nodeVersion: "", today: "2026-09-30" });
+  assert.deepEqual(dotnet, [["runtime", "a/A.csproj: net6.0 reached end of life on 2024-11-12."]]);
+  const node = checkRuntimes({ frameworks: [], nodeVersion: "18", today: "2026-09-30" });
+  assert.match(node[0][1], /Node 18 reached end of life on 2025-04-30/);
 });
 
 test("targetFrameworks dedupes the same runtime in one file", () => {
@@ -444,15 +477,16 @@ test("auditRepo runs every check over one repo's data", () => {
   assert.equal(suppressions.length, 4);
 });
 
-test("tokenFor prefers an owner-specific token, then the audit token, then the Actions token", () => {
+test("tokenFor: an org's own token, WARD_AUDIT_TOKEN for my repos only, never the Actions token", () => {
   const env = {
     GITHUB_TOKEN: "actions",
     WARD_AUDIT_TOKEN: "audit",
     AUDIT_TOKEN_ROOKDEX: "org",
   };
   assert.equal(tokenFor("rookdex", env), "org");
-  assert.equal(tokenFor("wendhq", env), "audit");
-  assert.equal(tokenFor("malinfossum", { GITHUB_TOKEN: "actions" }), "actions");
+  assert.equal(tokenFor("wendhq", env), "");
+  assert.equal(tokenFor("malinfossum", env), "audit");
+  assert.equal(tokenFor("malinfossum", { GITHUB_TOKEN: "actions" }), "");
   assert.equal(tokenFor("funn-team", { AUDIT_TOKEN_FUNN_TEAM: "t" }), "t");
   assert.equal(tokenFor("x", {}), "");
 });
@@ -510,6 +544,336 @@ test("the suppression table redacts email addresses from the public reason", () 
   assert.ok(!row.includes("@"));
   assert.ok(row.includes("[redacted]"));
   assert.ok(suppressionRow({ repo: "r", file: "f", advisory: "a", reason: "" }).includes("(none)"));
+});
+
+// A stand-in for fetch: the first route whose pattern matches the API path
+// answers, a route whose status is an Error throws it like a network failure,
+// and an unrouted path gets a 599 so a missing route fails loudly. Every call
+// is recorded with its Authorization header. Each test restores the real fetch
+// in a finally, so no test ever touches the network.
+function stubFetch(routes) {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url).replace("https://api.github.com", "");
+    calls.push({ path, auth: init.headers?.Authorization ?? "" });
+    const route = routes.find(([pattern]) => pattern.test(path));
+    if (!route) return new Response(null, { status: 599 });
+    const [, status, body] = route;
+    if (status instanceof Error) throw status;
+    return new Response(body === undefined ? null : JSON.stringify(body), { status });
+  };
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+// Runs fn with console.log captured, so annotations printed by the code under
+// test never reach the test log (where CI would read them as real ones).
+async function quietly(fn) {
+  const lines = [];
+  const original = console.log;
+  console.log = (line) => lines.push(String(line));
+  try {
+    return { lines, result: await fn() };
+  } finally {
+    console.log = original;
+  }
+}
+
+const b64 = (text) => Buffer.from(text).toString("base64");
+const SETTINGS = /\/(automated-security-fixes|vulnerability-alerts|code-scanning\/default-setup)$/;
+const META = {
+  full_name: "malinfossum/x",
+  default_branch: "main",
+  security_and_analysis: baseline.analysis,
+};
+const REPO_ROUTES = [
+  [
+    /\/git\/trees\/main\?recursive=1$/,
+    200,
+    {
+      truncated: false,
+      tree: [
+        { type: "blob", path: "package.json" },
+        { type: "tree", path: "src" },
+        { type: "blob", path: "src/App.csproj" },
+      ],
+    },
+  ],
+  [/\/contents\/\.github\/workflows\/ward\.yml$/, 200, { content: b64(CALLER) }],
+  [
+    /\/contents\/src\/App\.csproj$/,
+    200,
+    { content: b64("<TargetFramework>net8.0</TargetFramework>") },
+  ],
+  [/\/rules\/branches\/main$/, 200, baseline.rules],
+];
+
+test("fetchRepoData: with admin read, 200 and 204 fill every setting", async () => {
+  const stub = stubFetch([
+    [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
+    [/\/vulnerability-alerts$/, 204],
+    [/\/code-scanning\/default-setup$/, 200, { state: "configured" }],
+    ...REPO_ROUTES,
+  ]);
+  try {
+    const data = await fetchRepoData(META, { admin: "admin", read: "read", stacks });
+    assert.deepEqual(data.baseline, baseline);
+    assert.deepEqual(data.tree, ["package.json", "src/App.csproj"]);
+    assert.equal(data.caller, CALLER);
+    assert.deepEqual(data.files, { "src/App.csproj": "<TargetFramework>net8.0</TargetFramework>" });
+    assert.deepEqual(checkBaseline(data.baseline), []);
+    for (const call of stub.calls) {
+      assert.equal(call.auth, SETTINGS.test(call.path) ? "Bearer admin" : "Bearer read", call.path);
+    }
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchRepoData: with admin read, a 404 on either Dependabot endpoint means off", async () => {
+  const stub = stubFetch([
+    [/\/automated-security-fixes$/, 404],
+    [/\/vulnerability-alerts$/, 404],
+    [/\/code-scanning\/default-setup$/, 200, { state: "configured" }],
+    ...REPO_ROUTES,
+  ]);
+  try {
+    const data = await fetchRepoData(META, { admin: "admin", read: "read", stacks });
+    assert.deepEqual(data.baseline.securityUpdates, { enabled: false, paused: false });
+    assert.equal(data.baseline.alerts, false);
+    const findings = checkBaseline(data.baseline);
+    assert.deepEqual(kinds(findings), ["baseline", "baseline"]);
+    assert.match(findings[0][1], /alerts are off/);
+    assert.match(findings[1][1], /security updates are off/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchRepoData: without admin read every setting is unreadable, whatever the endpoints say", async () => {
+  const stub = stubFetch([
+    [/\/automated-security-fixes$/, 403],
+    [/\/vulnerability-alerts$/, 404],
+    [/\/code-scanning\/default-setup$/, 403],
+    ...REPO_ROUTES,
+  ]);
+  try {
+    const { security_and_analysis, ...plain } = META;
+    const data = await fetchRepoData(plain, { admin: "admin", read: "read", stacks });
+    const { securityUpdates, alerts, analysis, codeScanning } = data.baseline;
+    assert.deepEqual([securityUpdates, alerts, analysis, codeScanning], [null, null, null, null]);
+    assert.ok(!stub.calls.some((call) => SETTINGS.test(call.path)), "no settings request");
+    const findings = checkBaseline(data.baseline);
+    assert.deepEqual(kinds(findings), ["token"]);
+    assert.match(findings[0][1], /Administration \(read\)/);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchRepoData: with no admin token the settings are not read and one finding names the secret", async () => {
+  const stub = stubFetch(REPO_ROUTES);
+  try {
+    // A user token as the read token can see security_and_analysis; the
+    // missing admin token still decides.
+    for (const [owner, secret] of [
+      ["malinfossum", "WARD_AUDIT_TOKEN"],
+      ["rookdex", "AUDIT_TOKEN_ROOKDEX"],
+    ]) {
+      const meta = { ...META, full_name: `${owner}/x` };
+      const data = await fetchRepoData(meta, { admin: "", read: "read", stacks });
+      const { securityUpdates, alerts, analysis, codeScanning } = data.baseline;
+      assert.deepEqual([securityUpdates, alerts, analysis, codeScanning], [null, null, null, null]);
+      assert.deepEqual(checkBaseline(data.baseline), [
+        ["token", `${secret} is not set, so the settings of ${owner}/x were not read.`],
+      ]);
+    }
+    assert.ok(!stub.calls.some((call) => SETTINGS.test(call.path)), "no settings request");
+    assert.ok(stub.calls.every((call) => call.auth === "Bearer read"));
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchRepoData: a tree that does not answer 200 is an error, never an empty repo", async () => {
+  const stub = stubFetch([[/\/git\/trees\//, 404]]);
+  try {
+    await assert.rejects(
+      fetchRepoData(META, { admin: "admin", read: "read", stacks }),
+      /GitHub API 404 on the tree of malinfossum\/x/,
+    );
+  } finally {
+    stub.restore();
+  }
+});
+
+test("listRepos pages until a short page, drops private and fork repos, and a missing owner is empty", async () => {
+  const repo = (name, extra = {}) => ({
+    name,
+    full_name: `malinfossum/${name}`,
+    owner: { login: "malinfossum" },
+    fork: false,
+    private: false,
+    ...extra,
+  });
+  const first = Array.from({ length: 100 }, (_, i) => repo(`r${String(i).padStart(3, "0")}`));
+  first[0] = repo("forked", { fork: true });
+  first[1] = repo("hidden", { private: true });
+  const stub = stubFetch([
+    [/\/users\/malinfossum\/repos\?.*&page=1$/, 200, first],
+    [/\/users\/malinfossum\/repos\?.*&page=2$/, 200, [repo("zz")]],
+    [/\/users\/ghost\/repos/, 404],
+  ]);
+  try {
+    const names = (await listRepos(["malinfossum"], "read")).map((r) => r.name);
+    assert.equal(names.length, 99);
+    assert.ok(!names.includes("forked") && !names.includes("hidden"));
+    assert.equal(names.at(-1), "zz");
+    const pages = stub.calls.filter((call) => call.path.startsWith("/users/malinfossum/"));
+    assert.equal(pages.length, 2, "stops after the short second page");
+    assert.deepEqual(await listRepos(["ghost"], "read"), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchFile decodes a 200 and reads a 404 as no file", async () => {
+  const stub = stubFetch([
+    [/\/contents\/docs\/a\.md$/, 200, { content: b64("héllo\n") }],
+    [/\/contents\/missing\.md$/, 404],
+  ]);
+  try {
+    assert.equal(await fetchFile("malinfossum/x", "docs/a.md", "read"), "héllo\n");
+    assert.equal(await fetchFile("malinfossum/x", "missing.md", "read"), null);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("an annotation escapes newlines, so a message cannot start a workflow command", async () => {
+  const message = "line one\n::stop-commands::token\r\n100% sure";
+  const { lines, result } = await quietly(() =>
+    report("malinfossum/x", [["baseline", message]], "error"),
+  );
+  assert.equal(
+    lines.find((line) => line.startsWith("::")),
+    "::error::malinfossum/x [baseline] line one%0A::stop-commands::token%0D%0A100%25 sure",
+  );
+  assert.ok(lines.every((line) => !/[\r\n]/.test(line)));
+  assert.ok(result.includes("- **baseline**: line one ::stop-commands::token 100% sure\n"));
+});
+
+test("a failed repo list or canary read is an error finding, and the summary still comes back", async () => {
+  const stub = stubFetch([
+    [/\/users\/rookdex\/repos/, 502],
+    [/\/users\/malinfossum\/repos/, 200, []],
+    [/\/canary\.yml\/runs/, 503],
+  ]);
+  try {
+    const { result } = await quietly(() =>
+      runAudit(["--owner", "rookdex,malinfossum", "--mode", "strict"], { GITHUB_TOKEN: "read" }),
+    );
+    assert.match(
+      result.summary,
+      /### rookdex\n\n- \*\*error\*\*: rookdex: could not list repos \(HTTP 502\)\n/,
+    );
+    assert.match(
+      result.summary,
+      /### malinfossum\/ward canary\n\n- \*\*error\*\*: .*GitHub API 503/,
+    );
+    assert.ok(stub.calls.some((call) => call.path.startsWith("/users/malinfossum/repos")));
+    assert.equal(result.failures, 2);
+  } finally {
+    stub.restore();
+  }
+  const thrown = stubFetch([
+    [/\/users\//, 200, []],
+    [/\/canary\.yml\/runs/, new TypeError("fetch failed")],
+  ]);
+  try {
+    const { result } = await quietly(() =>
+      runAudit(["--mode", "strict"], { GITHUB_TOKEN: "read" }),
+    );
+    assert.match(result.summary, /### malinfossum\/ward canary\n\n- \*\*error\*\*: .*fetch failed/);
+    assert.equal(result.failures, 1);
+  } finally {
+    thrown.restore();
+  }
+});
+
+test("an error on an archived repo is a warning in the archived section, never a failure", async () => {
+  const listed = {
+    name: "old",
+    full_name: "rookdex/old",
+    owner: { login: "rookdex" },
+    archived: true,
+    fork: false,
+    private: false,
+  };
+  const stub = stubFetch([
+    [/\/users\/rookdex\/repos/, 200, [listed]],
+    [/^\/repos\/rookdex\/old$/, 500],
+    [/\/canary\.yml\/runs/, 404],
+  ]);
+  try {
+    const { lines, result } = await quietly(() =>
+      runAudit(["--owner", "rookdex", "--include-archived", "--mode", "strict"], {
+        GITHUB_TOKEN: "read",
+      }),
+    );
+    assert.equal(result.failures, 0);
+    const archived = result.summary.split("<details>")[1] ?? "";
+    assert.match(archived, /### rookdex\/old \(archived\)\n\n- \*\*error\*\*: GitHub API 500/);
+    assert.ok(lines.some((line) => line.startsWith("::warning::rookdex/old (archived) [error]")));
+  } finally {
+    stub.restore();
+  }
+});
+
+test("an org without its own token: one token finding naming the secret, and the admin token never sent", async () => {
+  const stub = stubFetch([
+    [
+      /\/users\/rookdex\/repos/,
+      200,
+      [
+        {
+          name: "x",
+          full_name: "rookdex/x",
+          owner: { login: "rookdex" },
+          fork: false,
+          private: false,
+        },
+      ],
+    ],
+    [
+      /^\/repos\/rookdex\/x$/,
+      200,
+      { full_name: "rookdex/x", default_branch: "main", archived: false },
+    ],
+    [/\/git\/trees\/main/, 200, { truncated: false, tree: [] }],
+    [/\/contents\//, 404],
+    [/\/rules\/branches\/main$/, 200, baseline.rules],
+    [/\/canary\.yml\/runs/, 404],
+  ]);
+  try {
+    const env = { GITHUB_TOKEN: "read", WARD_AUDIT_TOKEN: "mine" };
+    const { result } = await quietly(() =>
+      runAudit(["--owner", "rookdex", "--mode", "strict"], env),
+    );
+    const tokenLines = result.summary.split("\n").filter((line) => line.startsWith("- **token**"));
+    assert.deepEqual(tokenLines, [
+      "- **token**: AUDIT_TOKEN_ROOKDEX is not set, so the settings of rookdex/x were not read.",
+    ]);
+    assert.ok(stub.calls.every((call) => call.auth === "Bearer read"));
+    assert.ok(!stub.calls.some((call) => SETTINGS.test(call.path)));
+  } finally {
+    stub.restore();
+  }
 });
 
 const liveToken = process.env.GITHUB_TOKEN || "";
