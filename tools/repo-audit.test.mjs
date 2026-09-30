@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   auditRepo,
+  canaryFindings,
   checkBaseline,
   checkCaller,
   checkCanary,
@@ -10,10 +11,19 @@ import {
   checkRuntimes,
   checkSuppressions,
   EOL,
+  expectsAdminRead,
+  fetchRepoData,
   findSuppressions,
+  hardCount,
   parseCaller,
+  redactEmails,
+  request,
+  suppressionRow,
   targetFrameworks,
+  tokenFor,
+  WARD,
   WARN_KINDS,
+  warnKindsFor,
 } from "./repo-audit.mjs";
 import { detectStacks, loadStacks } from "./stacks.mjs";
 
@@ -432,4 +442,85 @@ test("auditRepo runs every check over one repo's data", () => {
   const { findings, suppressions } = auditRepo(data, { stacks, today: "2026-09-30" });
   assert.deepEqual(kinds(findings).sort(), ["runtime", "runtime", "suppression"]);
   assert.equal(suppressions.length, 4);
+});
+
+test("tokenFor prefers an owner-specific token, then the audit token, then the Actions token", () => {
+  const env = {
+    GITHUB_TOKEN: "actions",
+    WARD_AUDIT_TOKEN: "audit",
+    AUDIT_TOKEN_ROOKDEX: "org",
+  };
+  assert.equal(tokenFor("rookdex", env), "org");
+  assert.equal(tokenFor("wendhq", env), "audit");
+  assert.equal(tokenFor("malinfossum", { GITHUB_TOKEN: "actions" }), "actions");
+  assert.equal(tokenFor("funn-team", { AUDIT_TOKEN_FUNN_TEAM: "t" }), "t");
+  assert.equal(tokenFor("x", {}), "");
+});
+
+test("a token finding fails the run where admin read is promised", () => {
+  assert.equal(expectsAdminRead("malinfossum", {}), true);
+  assert.equal(expectsAdminRead("rookdex", {}), false);
+  assert.equal(expectsAdminRead("rookdex", { AUDIT_TOKEN_ROOKDEX: "t" }), true);
+});
+
+test("a kind named in --warn-kinds is a warning; the same kind without the flag is a failure", () => {
+  const findings = [
+    ["caller", "x"],
+    ["baseline", "y"],
+    ["uncovered", "z"],
+  ];
+  assert.equal(hardCount(findings, warnKindsFor("malinfossum", {})), 2);
+  assert.equal(hardCount(findings, warnKindsFor("malinfossum", {}, ["caller"])), 1);
+  assert.ok(!warnKindsFor("malinfossum", {}).has("token"));
+  assert.ok(warnKindsFor("rookdex", {}).has("token"));
+});
+
+const NOW = "2026-09-30T06:00:00Z";
+
+test("canaryFindings: only a 404 means no canary; 401 and 403 are a token finding", () => {
+  assert.deepEqual(kinds(canaryFindings(404, null, NOW)), ["canary-missing"]);
+  for (const status of [401, 403]) {
+    const findings = canaryFindings(status, null, NOW);
+    assert.deepEqual(kinds(findings), ["token"]);
+    assert.match(findings[0][1], new RegExp(`HTTP ${status}`));
+    assert.ok(findings[0][1].includes(WARD));
+  }
+  const runs = { workflow_runs: [{ conclusion: "success", updated_at: "2026-09-29T06:00:00Z" }] };
+  assert.deepEqual(canaryFindings(200, runs, NOW), checkCanary(runs, NOW));
+});
+
+test("the suppression table redacts email addresses from the public reason", () => {
+  assert.equal(
+    redactEmails("ask a.b+c@proton.me or x@y.co.uk today"),
+    "ask [redacted] or [redacted] today",
+  );
+  const row = suppressionRow({
+    repo: "malinfossum/x",
+    file: "Directory.Build.props",
+    advisory: "https://github.com/advisories/GHSA-1",
+    reason: "2026-09-30 mail m.fossum@proton.me",
+  });
+  assert.ok(!row.includes("@"));
+  assert.ok(row.includes("[redacted]"));
+  assert.ok(suppressionRow({ repo: "r", file: "f", advisory: "a", reason: "" }).includes("(none)"));
+});
+
+const liveToken = process.env.GITHUB_TOKEN || "";
+// The one test that touches the network. Skipped without a token, so `npm test`
+// in CI and on a fresh clone stays offline; run it locally with
+// GITHUB_TOKEN=$(gh auth token) npm test.
+test("live: Ward itself passes the baseline, caller and input checks", {
+  skip: !liveToken && "no GITHUB_TOKEN in the environment",
+}, async () => {
+  const meta = (await request(`/repos/${WARD}`, liveToken)).body;
+  assert.equal(meta.full_name, WARD);
+  const data = await fetchRepoData(meta, { admin: liveToken, read: liveToken });
+  assert.equal(data.self, true);
+  assert.ok(data.tree.includes("package.json"));
+  assert.match(data.caller, /uses: \.\/\.github\/workflows\/ci\.yml/);
+  const { findings } = auditRepo(data, { stacks, today: new Date().toISOString().slice(0, 10) });
+  const hard = findings.filter(([kind]) =>
+    ["baseline", "ruleset", "caller", "inputs"].includes(kind),
+  );
+  assert.deepEqual(hard, []);
 });

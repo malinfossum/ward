@@ -3,8 +3,11 @@
 // audit suppression carries a dated reason, no runtime is near end of life,
 // and Ward's canary is alive. Each check is a pure function over fetched data
 // that returns [kind, message] findings; main() only fetches and reports.
+import { appendFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
-import { detectStacks } from "./stacks.mjs";
+import { fetchFile, listRepos } from "./repo-hygiene.mjs";
+import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
 
 export const WARD = "malinfossum/ward";
 export const REQUIRED_USES = "malinfossum/ward/.github/workflows/ci.yml@v1";
@@ -354,4 +357,219 @@ export function auditRepo({ tree, caller, files, baseline, self }, { stacks, tod
   const nodeVersion = inputs?.node ? inputs["node-version"] || "24" : "";
   findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
   return { findings, suppressions };
+}
+
+const API = "https://api.github.com";
+
+const auditKey = (owner) => `AUDIT_TOKEN_${owner.toUpperCase().replaceAll("-", "_")}`;
+
+// The admin token for an owner. A fine-grained token is scoped to one resource
+// owner, so an org can carry its own in AUDIT_TOKEN_<OWNER>. Without one,
+// WARD_AUDIT_TOKEN is tried and the settings reads report a token warning for
+// that org's repos. Everything else the audit reads is public and goes through
+// the Actions token, so the admin token needs Administration (read) and
+// nothing else: if it leaks, it can read settings, never code.
+export function tokenFor(owner, env) {
+  return env[auditKey(owner)] || env.WARD_AUDIT_TOKEN || env.GITHUB_TOKEN || "";
+}
+
+// Where admin read is promised (my own repos, and an org with its own token),
+// a token finding is a failure: a missing or expired token must not turn the
+// settings checks into a silent pass. Another org without a token keeps the
+// warning.
+export function expectsAdminRead(owner, env) {
+  return owner.toLowerCase() === WARD.split("/")[0] || Boolean(env[auditKey(owner)]);
+}
+
+// The warning set for one owner: WARN_KINDS, minus token where admin read is
+// promised, plus the kinds --warn-kinds names for this run (caller until Plan
+// 5 rolls the caller out, so a red run means new drift, not the rollout).
+export function warnKindsFor(owner, env, extra = []) {
+  const kinds = new Set([...WARN_KINDS, ...extra]);
+  if (expectsAdminRead(owner, env)) kinds.delete("token");
+  return kinds;
+}
+
+// Status plus parsed body. 401, 403 and 404 come back as a status with a null
+// body, because for the settings endpoints they mean "cannot read" or "off",
+// which the checks decide. Anything else 4xx or 5xx is a real failure.
+export async function request(path, token) {
+  const res = await fetch(`${API}${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "ward-repo-audit",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  const silent = res.status === 204 || [401, 403, 404].includes(res.status);
+  if (res.status >= 400 && !silent) throw new Error(`GitHub API ${res.status} on ${path}`);
+  return { status: res.status, body: silent ? null : await res.json() };
+}
+
+const PROPS_OR_PROJECT = /(^|\/)(Directory\.Build\.props|[^/]+\.csproj)$/;
+
+// admin: the token for the four settings endpoints; read: the token for the
+// public reads (tree, caller, project files, branch rules). stacks supplies the
+// ignore prefixes, the same ones stack detection skips.
+export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
+  const repo = meta.full_name;
+  const branch = encodeURIComponent(meta.default_branch);
+  const tree = await request(`/repos/${repo}/git/trees/${branch}?recursive=1`, read);
+  // A tree on a public repo answers without a token, so anything but 200 is a
+  // real failure (a rate limit, or a repo with no commits yet), never "no files".
+  if (tree.status !== 200) throw new Error(`GitHub API ${tree.status} on the tree of ${repo}`);
+  if (tree.body.truncated) {
+    console.log(`::warning::${repo}: the tree is truncated, stack detection may miss files`);
+  }
+  const paths = tree.body.tree.filter((e) => e.type === "blob").map((e) => e.path);
+  const caller = await fetchFile(repo, ".github/workflows/ward.yml", read);
+  const files = {};
+  for (const path of paths.filter((p) => PROPS_OR_PROJECT.test(p) && !ignored(p, stacks.ignore))) {
+    const text = await fetchFile(repo, path, read);
+    if (text) files[path] = text;
+  }
+  const [updates, alerts, codeScanning, rules] = await Promise.all([
+    request(`/repos/${repo}/automated-security-fixes`, admin),
+    request(`/repos/${repo}/vulnerability-alerts`, admin),
+    request(`/repos/${repo}/code-scanning/default-setup`, admin),
+    request(`/repos/${repo}/rules/branches/${branch}`, read),
+  ]);
+  const readable = (res) => (res.status === 200 ? res.body : null);
+  return {
+    self: repo === WARD,
+    tree: paths,
+    caller,
+    files,
+    baseline: {
+      securityUpdates: readable(updates),
+      alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
+      analysis: meta.security_and_analysis ?? null,
+      codeScanning: readable(codeScanning),
+      rules: readable(rules),
+    },
+  };
+}
+
+// The canary runs endpoint answers 404 when canary.yml does not exist yet, and
+// 401 or 403 when the token cannot read it. Only the 404 means "no canary": a
+// token that cannot read must never look like a missing workflow.
+export function canaryFindings(status, body, now) {
+  if (status === 401 || status === 403) {
+    return [["token", `Cannot read canary runs on ${WARD} (HTTP ${status}).`]];
+  }
+  return checkCanary(status === 404 ? null : body, now);
+}
+
+// The suppression reason is free text from a public file and the audit log is
+// public too, so an email address in it never reaches the summary.
+export const redactEmails = (text) => text.replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[redacted]");
+
+export const suppressionRow = (s) =>
+  `| ${s.repo} | ${s.file} | ${s.advisory} | ${redactEmails(s.reason || "(none)")} |\n`;
+
+// level: "error" fails the job (strict), "warning" never does, "" prints
+// plainly (archived repos). warnKinds stay warnings in every mode.
+function report(name, findings, level, warnKinds = WARN_KINDS) {
+  if (!findings.length) {
+    console.log(`OK    ${name}`);
+    return "";
+  }
+  console.log(`AUDIT ${name}: ${findings.length} finding(s)`);
+  const lines = [`### ${name}`, ""];
+  for (const [kind, message] of findings) {
+    const shown = level && warnKinds.has(kind) ? "warning" : level;
+    console.log(shown ? `::${shown}::${name} [${kind}] ${message}` : `  [${kind}] ${message}`);
+    lines.push(`- **${kind}**: ${message}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+export const hardCount = (findings, warnKinds = WARN_KINDS) =>
+  findings.filter(([kind]) => !warnKinds.has(kind)).length;
+
+async function main(argv) {
+  const arg = (flag, fallback = "") => {
+    const i = argv.indexOf(flag);
+    return i === -1 ? fallback : argv[i + 1];
+  };
+  const owners = arg("--owner", "malinfossum")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+  const includeArchived = argv.includes("--include-archived");
+  const strict = arg("--mode", "warn") === "strict";
+  const level = strict ? "error" : "warning";
+  // Kinds demoted to warnings for this run: `--warn-kinds caller` until Plan 5.
+  const extraWarn = arg("--warn-kinds", "")
+    .split(",")
+    .map((kind) => kind.trim())
+    .filter(Boolean);
+  const env = process.env;
+  // Public reads: the Actions token in CI, `gh auth token` locally.
+  const read = env.GITHUB_TOKEN || "";
+  const stacks = loadStacks();
+  const today = new Date().toISOString().slice(0, 10);
+
+  let summary = "";
+  let archivedSummary = "";
+  let failures = 0;
+  const suppressions = [];
+  for (const owner of owners) {
+    const admin = tokenFor(owner, env);
+    const warnKinds = warnKindsFor(owner, env, extraWarn);
+    for (const listed of await listRepos([owner], read)) {
+      if (listed.archived && !includeArchived) continue;
+      // One repo's API error is that repo's finding, so the others still
+      // report and the summary survives; the run still fails on it.
+      try {
+        // The list omits security_and_analysis; the single-repo call has it.
+        const meta = (await request(`/repos/${listed.full_name}`, admin)).body ?? listed;
+        const data = await fetchRepoData(meta, { admin, read, stacks });
+        const result = auditRepo(data, { stacks, today });
+        suppressions.push(...result.suppressions.map((s) => ({ repo: meta.full_name, ...s })));
+        // Archived repos are read-only on GitHub: reported, never failing.
+        if (meta.archived) {
+          archivedSummary += report(`${meta.full_name} (archived)`, result.findings, "");
+        } else {
+          summary += report(meta.full_name, result.findings, level, warnKinds);
+          failures += hardCount(result.findings, warnKinds);
+        }
+      } catch (error) {
+        summary += report(listed.full_name, [["error", error.message]], level, warnKinds);
+        failures += 1;
+      }
+    }
+  }
+
+  const canary = await request(
+    `/repos/${WARD}/actions/workflows/${CANARY}/runs?per_page=1&status=completed`,
+    read,
+  );
+  const canaryResult = canaryFindings(canary.status, canary.body, new Date().toISOString());
+  summary += report(`${WARD} canary`, canaryResult, level);
+  failures += hardCount(canaryResult);
+
+  if (suppressions.length) {
+    summary +=
+      "### NuGet audit suppressions\n\n| Repo | File | Advisory | Reason |\n|---|---|---|---|\n";
+    for (const s of suppressions) summary += suppressionRow(s);
+    summary += "\n";
+  }
+  if (archivedSummary) {
+    summary += `\n<details><summary>Archived repos (read-only, unarchive to fix)</summary>\n\n${archivedSummary}</details>\n`;
+  }
+  if (env.GITHUB_STEP_SUMMARY && summary) {
+    appendFileSync(env.GITHUB_STEP_SUMMARY, `## Repo audit\n\n${summary}`);
+  }
+  console.log(failures ? `${failures} finding(s).` : "No findings.");
+  process.exitCode = failures && strict ? 1 : 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main(process.argv.slice(2)).catch((error) => {
+    console.log(`::error::${error.message}`);
+    process.exitCode = 1;
+  });
 }

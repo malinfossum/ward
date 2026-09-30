@@ -16,7 +16,7 @@ function matches(pattern, basename) {
 }
 
 // Ignore prefixes match whole path segments: `bin/` skips `src/bin/x` but not `cabin/x`.
-function ignored(path, prefixes) {
+export function ignored(path, prefixes) {
   const segmented = `/${path}`;
   return prefixes.some((prefix) => segmented.includes(`/${prefix}`));
 }
