@@ -30,7 +30,9 @@ const unquote = (value) =>
 // Reads the job that calls ci.yml out of a caller workflow: the ref it uses,
 // its `with:` inputs, and the ref of the auto-merge job when there is one. The
 // file is small and written by me or the skill, so a line-based parse is
-// enough; a caller too odd to parse reads as absent.
+// enough. A caller too odd to parse reads as absent, never as a caller with
+// wrong inputs: a `with:` before `uses:` or in flow style is such a caller, and
+// "caller missing" is a better report than a false "input is empty".
 export function parseCaller(text) {
   const lines = text.split(/\r?\n/);
   const at = lines.findIndex((line) =>
@@ -39,20 +41,25 @@ export function parseCaller(text) {
   if (at === -1) return null;
   const uses = unquote(lines[at].replace(/^\s*uses:\s*/, ""));
   const indent = indentOf(lines[at]);
+  const skippable = (line) => line.trim() === "" || /^\s*#/.test(line);
+  // The job is the run of lines around `uses:` indented at least as far.
+  const inJob = (line) => skippable(line) || indentOf(line) >= indent;
+  let first = at;
+  while (first > 0 && inJob(lines[first - 1])) first--;
+  let last = at;
+  while (last + 1 < lines.length && inJob(lines[last + 1])) last++;
   let withAt = -1;
-  for (let i = at + 1; i < lines.length; i++) {
-    if (lines[i].trim() === "") continue;
-    const depth = indentOf(lines[i]);
-    if (depth < indent) break;
-    if (depth === indent && /^\s*with:\s*$/.test(lines[i])) {
-      withAt = i;
-      break;
+  for (let i = first; i <= last; i++) {
+    if (skippable(lines[i]) || indentOf(lines[i]) !== indent || !/^\s*with:/.test(lines[i])) {
+      continue;
     }
+    if (i < at || !/^\s*with:\s*(#.*)?$/.test(lines[i])) return null;
+    withAt = i;
   }
   const inputs = {};
   if (withAt !== -1) {
     for (const line of lines.slice(withAt + 1)) {
-      if (line.trim() === "") continue;
+      if (skippable(line)) continue;
       if (indentOf(line) <= indent) break;
       const match = line.match(/^\s*([\w-]+):\s*(.*)$/);
       if (match) inputs[match[1]] = unquote(match[2]);
@@ -135,9 +142,9 @@ export function checkInputs(inputs, detected, paths) {
 export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning, rules }) {
   const findings = [];
   const unreadable = [];
-  if (alerts === null) unreadable.push("Dependabot alerts");
+  if (alerts == null) unreadable.push("Dependabot alerts");
   else if (!alerts) findings.push(["baseline", "Dependabot alerts are off."]);
-  if (securityUpdates === null) unreadable.push("Dependabot security updates");
+  if (securityUpdates == null) unreadable.push("Dependabot security updates");
   else if (!securityUpdates.enabled || securityUpdates.paused) {
     findings.push(["baseline", "Dependabot security updates are off or paused."]);
   }
@@ -150,7 +157,7 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
       findings.push(["baseline", "Push protection is off."]);
     }
   }
-  if (codeScanning === null) unreadable.push("CodeQL default setup");
+  if (codeScanning == null) unreadable.push("CodeQL default setup");
   else if (codeScanning.state !== "configured") {
     // The API lists the languages CodeQL would analyse even when setup is
     // off. A repo with none (docs only) cannot turn it on, so that is not a
@@ -158,7 +165,7 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
     const analysable = codeScanning.languages ? codeScanning.languages.length > 0 : true;
     if (analysable) findings.push(["baseline", "CodeQL default setup is not configured."]);
   }
-  if (rules === null) unreadable.push("branch rules");
+  if (rules == null) unreadable.push("branch rules");
   else {
     const types = new Set(rules.map((rule) => rule.type));
     if (!types.has("pull_request")) {

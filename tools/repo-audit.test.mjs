@@ -48,6 +48,31 @@ test("parseCaller reads a caller with no with: block, and none for a file that n
   assert.equal(parseCaller("jobs:\n  build:\n    runs-on: ubuntu-latest\n"), null);
 });
 
+test("a caller the line parser cannot read is absent, not a caller with wrong inputs", () => {
+  const before =
+    "jobs:\n  ward:\n    with:\n      node: web\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n";
+  assert.equal(parseCaller(before), null);
+  const flow =
+    "jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with: { node: web }\n";
+  assert.equal(parseCaller(flow), null);
+  assert.deepEqual(kinds(checkCaller(flow, { self: false })), ["caller"]);
+});
+
+test("a comment line inside the with block does not end it", () => {
+  const text = [
+    "jobs:",
+    "  ward:",
+    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
+    "    with:",
+    "      node: web",
+    "# a comment at column zero",
+    "    # a comment at the job's indent",
+    "      dotnet: api/App.slnx",
+    "",
+  ].join("\n");
+  assert.deepEqual(parseCaller(text).inputs, { node: "web", dotnet: "api/App.slnx" });
+});
+
 test("checkCaller wants ward.yml present and on @v1", () => {
   assert.deepEqual(kinds(checkCaller(null, { self: false })), ["caller"]);
   assert.deepEqual(
@@ -205,6 +230,13 @@ test("a ruleset that allows force pushes or skips code scanning is a finding per
   assert.deepEqual(kinds(findings), ["ruleset", "ruleset"]);
   assert.match(findings[0][1], /force push/);
   assert.match(findings[1][1], /code scanning/);
+});
+
+test("a field missing from the fetched data is a token warning, not a crash", () => {
+  for (const field of ["securityUpdates", "alerts", "analysis", "codeScanning", "rules"]) {
+    const findings = checkBaseline({ ...baseline, [field]: undefined });
+    assert.deepEqual(kinds(findings), ["token"], field);
+  }
 });
 
 test("CodeQL off is a finding only where CodeQL has a language to analyse", () => {
