@@ -1,0 +1,47 @@
+# Reusable: checks a repo's public face (description, topics, homepage, Stack
+# section, versions, links) against its README. A repo calls this from its own
+# repo-hygiene.yml; the caller in docs/repo-hygiene.md shows the triggers.
+name: Repo hygiene
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: warn (report only) or strict (fail the job on drift)
+        type: string
+        default: warn
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  ASTRO_TELEMETRY_DISABLED: "1"
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: The README matches the repo
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MODE: ${{ inputs.mode }}
+        run: node "$RUNNER_TEMP/ward/tools/repo-hygiene.mjs" --repo "$REPO" --mode "$MODE"

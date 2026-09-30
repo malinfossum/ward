@@ -77,3 +77,63 @@ test("dependabot-automerge.yml runs the decision even when fetch-metadata fails"
   assert.ok(step, "no Merge when safe step found");
   assert.match(step[1], /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m);
 });
+
+// The rest of this file guards what Global Constraints promise for every
+// workflow, so a new workflow cannot quietly drop them.
+const workflows = readdirSync(".github/workflows").map((f) => join(".github/workflows", f));
+const readWorkflow = (file) => readFileSync(file, "utf8");
+
+// The jobs: block as { name, body } pairs; body holds the job's indented lines.
+function jobsOf(file) {
+  const section = readWorkflow(file).split(/^jobs:\r?\n/m)[1] ?? "";
+  const out = [];
+  for (const line of section.split(/\r?\n/)) {
+    const head = line.match(/^ {2}([a-z][\w-]*):\s*$/);
+    if (head) out.push({ name: head[1], body: "" });
+    else if (out.length) out.at(-1).body += `${line}\n`;
+  }
+  return out;
+}
+
+test("every workflow grants only contents: read at the top level", () => {
+  // The line after `contents: read` must not be another permission.
+  for (const file of workflows) {
+    assert.match(readWorkflow(file), /^permissions:\r?\n {2}contents: read\r?\n(?! )/m, file);
+  }
+});
+
+test("every job that runs steps has a 10 or 30 minute timeout", () => {
+  let checked = 0;
+  for (const file of workflows) {
+    for (const job of jobsOf(file)) {
+      if (!/^ {4}runs-on:/m.test(job.body)) continue;
+      checked++;
+      assert.match(job.body, /^ {4}timeout-minutes: (10|30)$/m, `${file}: job ${job.name}`);
+    }
+  }
+  assert.ok(checked > 0, "no job with runs-on was scanned");
+});
+
+test("every workflow that runs steps turns telemetry off", () => {
+  for (const file of workflows) {
+    if (!/^ {4}runs-on:/m.test(readWorkflow(file))) continue;
+    for (const name of [
+      "DOTNET_CLI_TELEMETRY_OPTOUT",
+      "ASTRO_TELEMETRY_DISABLED",
+      "WRANGLER_SEND_METRICS",
+    ]) {
+      assert.match(readWorkflow(file), new RegExp(`^\\s+${name}:`, "m"), `${file}: ${name}`);
+    }
+  }
+});
+
+test("every reusable workflow fetches Ward's tools at its own commit", () => {
+  let checked = 0;
+  for (const file of workflows) {
+    if (!/^ {2}workflow_call:/m.test(readWorkflow(file))) continue;
+    checked++;
+    assert.match(readWorkflow(file), /repository: \$\{\{ job\.workflow_repository \}\}/, file);
+    assert.match(readWorkflow(file), /ref: \$\{\{ job\.workflow_sha \}\}/, file);
+  }
+  assert.equal(checked, 3, "ci.yml, dependabot-automerge.yml and repo-hygiene.yml");
+});
