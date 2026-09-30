@@ -1,0 +1,49 @@
+# Weekly sweep over every repo I own, archived ones included: README drift,
+# baseline settings, caller on @v1, caller inputs against the repo's stacks,
+# NuGet audit suppressions, runtimes near end of life, and Ward's canary.
+# Strict: a finding on a non-archived repo fails the run, and a failed
+# scheduled run emails me. Never on pull_request: this workflow reads a secret.
+name: Repo audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  ASTRO_TELEMETRY_DISABLED: "1"
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: README drift in every repo
+        # Public repos only: the Actions token is enough, and the admin token
+        # never reaches a step that does not need it.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/repo-hygiene.mjs --all --owner malinfossum,rookdex,wendhq --include-archived --mode strict
+      - name: Baseline, caller, inputs, suppressions, runtimes, canary
+        # Runs even when the README step failed, so one run shows everything.
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WARD_AUDIT_TOKEN: ${{ secrets.WARD_AUDIT_TOKEN }}
+          AUDIT_TOKEN_ROOKDEX: ${{ secrets.AUDIT_TOKEN_ROOKDEX }}
+          AUDIT_TOKEN_WENDHQ: ${{ secrets.AUDIT_TOKEN_WENDHQ }}
+        # --warn-kinds caller: a missing caller is a warning until Plan 5 rolls
+        # the caller out (decided 2026-09-30), so a red run means new drift.
+        # Plan 5 removes the flag.
+        run: node tools/repo-audit.mjs --owner malinfossum,rookdex,wendhq --include-archived --mode strict --warn-kinds caller

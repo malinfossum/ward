@@ -137,3 +137,15 @@ test("every reusable workflow fetches Ward's tools at its own commit", () => {
   }
   assert.equal(checked, 3, "ci.yml, dependabot-automerge.yml and repo-hygiene.yml");
 });
+
+test("a workflow that reads a secret runs only on a schedule or by hand", () => {
+  let checked = 0;
+  for (const file of workflows) {
+    if (!/secrets\./.test(readWorkflow(file))) continue;
+    checked++;
+    const on = readWorkflow(file).match(/^on:\r?\n((?: {2}.*\r?\n?)+)/m)?.[1] ?? "";
+    const triggers = [...on.matchAll(/^ {2}([a-z_]+):/gm)].map((m) => m[1]).sort();
+    assert.deepEqual(triggers, ["schedule", "workflow_dispatch"], file);
+  }
+  assert.equal(checked, 1, "repo-audit.yml is the one workflow that reads a secret");
+});
