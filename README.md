@@ -11,8 +11,6 @@ GitHub Actions reusable workflows, Node 24 scripts with no dependencies, `node:t
 
 ## Use it
 
-Available from `v1.0.0`; until that tag exists, `@v1` and the template's auto-merge pin do not resolve.
-
 Copy [`templates/ward.yml`](templates/ward.yml) to `.github/workflows/ward.yml` and set the inputs:
 
 ```yaml
