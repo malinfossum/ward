@@ -253,12 +253,15 @@ function commentAbove(lines, index) {
     start--;
   }
   if (start < 0) return "";
-  return lines
+  // The block is known to open with `<!--` and close with `-->`, so the
+  // markers come off by position. A regex strip here reads to CodeQL as an
+  // HTML sanitizer, which this is not: the text is a reason string, never
+  // rendered.
+  const block = lines
     .slice(start, end + 1)
     .join(" ")
-    .replace(/<!--|-->/g, "")
-    .replace(/\s+/g, " ")
     .trim();
+  return block.slice(4, -3).replace(/\s+/g, " ").trim();
 }
 
 // Every <NuGetAuditSuppress> outside a comment, with the reason beside it: a

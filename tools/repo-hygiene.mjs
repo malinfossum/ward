@@ -99,8 +99,21 @@ export function overlap(a, b) {
 // headings, badge rows, blockquotes, tables and HTML dropped. Taglines and
 // scene-setting lines mean the description often matches the second or third
 // paragraph, not the first, so the whole intro is the fair comparison.
+// Drop every `<!-- ... -->` block. Each pass restarts from the top, so the
+// result holds no opener at all; an unterminated comment drops the rest of
+// the text, which is what a Markdown renderer does with it too.
+function stripHtmlComments(text) {
+  for (;;) {
+    const open = text.indexOf("<!--");
+    if (open < 0) return text;
+    const close = text.indexOf("-->", open + 4);
+    if (close < 0) return text.slice(0, open);
+    text = text.slice(0, open) + text.slice(close + 3);
+  }
+}
+
 export function readmeIntro(md, limit = 600) {
-  const body = md.replace(/<!--[\s\S]*?-->/g, "").split(/^##\s/m)[0];
+  const body = stripHtmlComments(md).split(/^##\s/m)[0];
   const parts = [];
   for (const block of body.split(/\n\s*\n/)) {
     const line = block.trim();
