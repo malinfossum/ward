@@ -23,8 +23,9 @@ run emails me.
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see
 `stacks.json`), `canary-missing` (no `canary.yml` until Plan 5), `token` (the token cannot read a
 repo's settings; on my own repos, and on an org with its own token, this fails the run instead), and
-whatever `--warn-kinds` names for a run: the workflow passes `--warn-kinds caller` until Plan 5 rolls
-the caller out, so a red run means new drift, not the rollout.
+whatever `--warn-kinds` names for a run: the workflow passes `--warn-kinds caller,baseline,ruleset`
+until Plan 5 rolls the caller and the settings out, so a red run means new drift of another kind,
+not the rollout.
 Private repos never enter the sweep: it lists public repos only, since they keep Actions off and sit
 outside the standard.
 Archived repos are listed in a collapsed section and never fail the run. Every suppression found is

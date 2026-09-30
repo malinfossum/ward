@@ -43,7 +43,8 @@ jobs:
           WARD_AUDIT_TOKEN: ${{ secrets.WARD_AUDIT_TOKEN }}
           AUDIT_TOKEN_ROOKDEX: ${{ secrets.AUDIT_TOKEN_ROOKDEX }}
           AUDIT_TOKEN_WENDHQ: ${{ secrets.AUDIT_TOKEN_WENDHQ }}
-        # --warn-kinds caller: a missing caller is a warning until Plan 5 rolls
-        # the caller out (decided 2026-09-30), so a red run means new drift.
-        # Plan 5 removes the flag.
-        run: node tools/repo-audit.mjs --owner malinfossum,rookdex,wendhq --include-archived --mode strict --warn-kinds caller
+        # --warn-kinds caller,baseline,ruleset: until Plan 5 rolls the caller
+        # and the settings out, the drift it fixes is a warning (decided
+        # 2026-09-30), so a red run means new drift of another kind. Plan 5
+        # removes the flag.
+        run: node tools/repo-audit.mjs --owner malinfossum,rookdex,wendhq --include-archived --mode strict --warn-kinds caller,baseline,ruleset

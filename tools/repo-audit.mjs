@@ -568,7 +568,7 @@ export async function runAudit(argv, env) {
   const includeArchived = argv.includes("--include-archived");
   const strict = arg("--mode", "warn") === "strict";
   const level = strict ? "error" : "warning";
-  // Kinds demoted to warnings for this run: `--warn-kinds caller` until Plan 5.
+  // Kinds demoted to warnings for this run: `--warn-kinds caller,baseline,ruleset` until Plan 5.
   const extraWarn = arg("--warn-kinds", "")
     .split(",")
     .map((kind) => kind.trim())
