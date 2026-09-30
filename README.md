@@ -49,4 +49,4 @@ npm run lint
 | `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, Ward's own `ward.yml` |
 | `tools/` | The scripts each job runs, with their unit tests |
 | `templates/` | What a repo copies: caller, Dependabot config, rulesets, `Directory.Build.props` |
-| `fixtures/`, `tests/` | Known-good and known-broken projects and the tests that run them |
+| `fixtures/`, `tests/` | Known-good and known-broken projects (the C# ones are xUnit) and the tests that run them |
