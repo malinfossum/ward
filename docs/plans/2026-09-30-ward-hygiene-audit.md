@@ -2187,7 +2187,7 @@ Pushing the harness repo is Malin's call; say so in the report.
 - Plan 5: the canary workflow. Once `canary.yml` exists, remove `canary-missing` from `WARN_KINDS` in `tools/repo-audit.mjs` and the `assert.ok(WARN_KINDS.has("canary-missing"))` line in its test, so that a deleted or renamed canary fails the audit instead of reading as "not yet" for ever, and drop `--warn-kinds caller` from `repo-audit.yml`, so a missing caller fails the audit again. Consider folding the hygiene job into `templates/ward.yml` at rollout.
 - Plan 6: python, powershell and docker move from `planned` to `shipped` in `stacks.json` with their caller inputs.
 - 2026-10-28: Node 26 becomes Active LTS; bump the `node-version` default in `ci.yml` and the `"24"` fallback in `auditRepo`.
-- `WARD_AUDIT_TOKEN` on Ward expires one year after Task 9 Step 1 (I write the date here at that step). The Monday after, the audit is red with a `token` finding on every repo of mine; I make a new token the same way.
+- `WARD_AUDIT_TOKEN` on Ward expires 2027-10-01 (created 2026-10-01, Task 9 Step 1). The Monday after, the audit is red with a `token` finding on every repo of mine; I make a new token the same way.
 
 ## Considered and rejected (stress test 2026-09-30)
 
