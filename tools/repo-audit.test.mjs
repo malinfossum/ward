@@ -980,6 +980,11 @@ test("an exception can also defer a caller, ruleset or baseline finding on a joi
     findings.some(([kind]) => kind === "caller"),
     "an undeferred kind still fails",
   );
+  const exceptionFindings = findings.filter(([kind]) => kind === "exception");
+  assert.ok(
+    !exceptionFindings.some(([, msg]) => /stale exception/.test(msg)),
+    "a deferral key is not reported as a stale module exception",
+  );
 });
 
 test("an excepted module that is off is a warning naming the reason, never an inputs finding", () => {
