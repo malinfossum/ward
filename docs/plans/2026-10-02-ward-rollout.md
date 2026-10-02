@@ -36,9 +36,9 @@ Each line names an input the spec implies but no existing test covers, and the t
 4. An exception in `stacks.json` whose module has no files on the default branch, or whose caller input is set anyway, is reported as a stale exception so I remove it; a live exception is a warning naming its reason, never silence. Pinned in Task 3 (`checkInputs` tests).
 5. Exception keys match the repo name case-insensitively, because GitHub repo names are. Pinned in Task 3 (`exceptionsFor` test).
 
-## Decisions I need from Malin before the stress test
+## Decisions (all as recommended, Malin 2026-10-02)
 
-Each one has my recommendation first; say "all as recommended" or name the ones to change.
+Each one was written with my recommendation first; I took every recommendation on 2026-10-02, so the alternatives below are history, not open questions.
 
 - **D1, the canary's broken half.** A reusable-workflow job cannot be marked expected-to-fail, and a canary that is red by design every Monday would email me into ignoring it. Recommendation: the broken fixtures run through the published tag's scripts and fixture suite (`actions/checkout` at `ref: v1`, then `npm run test:fixtures`) instead of through `ci.yml@v1`'s gate; the good fixtures go through `ci.yml@v1` exactly as a consumer. The gate's red path is pinned by a unit test on `ci.yml` and was proven end to end by the Plan 1 red-gate PR. Recorded as a Plan 5 deviation in the spec.
 - **D2, watchdog direction.** Recommendation: the audit fails when the canary is red or stale (as today); the canary fails when the audit is stale or has never run, but not when it is merely red. Review Focus 1 explains why. Recorded as a deviation.
@@ -694,8 +694,6 @@ Add to the `$comment`: ` exceptions: repos where a detected shipped module stays
   },
 ```
 
-Drop the `ember-black` entry if D3 goes the other way.
-
 - [ ] **Step 4: `repo-audit.mjs`**
 
 `WARN_KINDS` becomes `new Set(["uncovered", "exception", "token"])` and its comment gains: `exception: a module I turned off on purpose, listed in stacks.json with a dated reason.`
@@ -910,7 +908,7 @@ hygiene check keeps its own caller file: folding it into `ward.yml` would make a
 every merge. `a11y` stays `off` in every caller until Plan 4 ships `test:a11y`.
 ```
 
-Adjust the two D-items above if Malin decided otherwise. In "Testing Ward itself", amend the canary bullet to end with `..., against the good fixtures through `ci.yml@v1` and the broken ones through the tag's own fixture suite, weekly and after every tag.` and the mutual-watchdogs bullet to: `**Mutual watchdogs.** `repo-audit` fails when the canary's last run is red, older than 8 days or missing; the canary fails when the audit has not completed a run in 8 days or never ran.`
+In "Testing Ward itself", amend the canary bullet to end with `..., against the good fixtures through `ci.yml@v1` and the broken ones through the tag's own fixture suite, weekly and after every tag.` and the mutual-watchdogs bullet to: `**Mutual watchdogs.** `repo-audit` fails when the canary's last run is red, older than 8 days or missing; the canary fails when the audit has not completed a run in 8 days or never ran.`
 
 - [ ] **Step 3: `docs/repo-audit.md`**
 
@@ -1098,8 +1096,7 @@ malinfossum/profile-dashboard|github-actions
 malinfossum/workbench|github-actions
 EOF
 ```
-`profile-dashboard` already has a `dependabot.yml`, so the generator is skipped there (report what it contains). Drop `ember-black` from the list if D3 said to fix it instead; it then moves to wave B with `node: .` and its tooling fix.
-
+`profile-dashboard` already has a `dependabot.yml`, so the generator is skipped there (report what it contains).
 `malinfossum/malinfossum` needs one hand edit before its commit (D9): the dashboard pushes a README refresh to `main` twice a day as `github-actions[bot]`, and the weekly scheduled run checks the head commit, which is almost always that bot's. Under `with:` in its `ward.yml` add:
 
 ```yaml
@@ -1244,8 +1241,7 @@ if [ -n "$id" ]; then gh api -X PUT "repos/$r/rulesets/$id" --input "$body" --jq
 else gh api -X POST "repos/$r/rulesets" --input "$body" --jq '{id,name,bypass_actors,rules:[.rules[].type]}'; fi
 gh api "repos/$r/rules/branches/main" --jq '[.[].type] | sort'
 ```
-Expected: `["code_scanning","deletion","non_fast_forward","pull_request","required_status_checks"]` (plus `required_linear_history` on spindle). `rookdex/rookdex` has two branch rulesets: the list endpoint returns 23300025 (deletion and non-fast-forward only) first and 23444906 (pull request, `web-tests`) second, so delete 23300025 first (`gh api -X DELETE repos/rookdex/rookdex/rulesets/23300025`) and let the script update 23444906. For `devops-course` (no ruleset today) the POST path runs. `malinfossum/malinfossum` runs with `BYPASS_ADMIN=1` (D9): the dashboard's twice-daily README push uses `PROFILE_README_TOKEN`, a token of mine, so the repository-admin bypass lets it through the pull-request and status-check rules, the same pattern as Ward's tag ruleset. If D5 exempts the course repos from the pull-request rule, filter that rule out in the node snippet for those two repos.
-
+Expected: `["code_scanning","deletion","non_fast_forward","pull_request","required_status_checks"]` (plus `required_linear_history` on spindle). `rookdex/rookdex` has two branch rulesets: the list endpoint returns 23300025 (deletion and non-fast-forward only) first and 23444906 (pull request, `web-tests`) second, so delete 23300025 first (`gh api -X DELETE repos/rookdex/rookdex/rulesets/23300025`) and let the script update 23444906. For `devops-course` (no ruleset today) the POST path runs. `malinfossum/malinfossum` runs with `BYPASS_ADMIN=1` (D9): the dashboard's twice-daily README push uses `PROFILE_README_TOKEN`, a token of mine, so the repository-admin bypass lets it through the pull-request and status-check rules, the same pattern as Ward's tag ruleset.
 - [ ] **Step 3: Allow auto-merge, in the same sitting as Step 2**
 
 Between the ruleset switch and this step a Dependabot PR's `automerge` job fails on `gh pr merge --auto` ("auto-merge is not allowed"), which is noise, not harm; doing both steps together avoids it.
@@ -1369,4 +1365,4 @@ Update `~/.claude/memory/domain/ward.md`'s Resume with the observed auto-merge a
 - **`a11y: warn` now.** Requires `test:a11y`, which Plan 4 writes.
 - **A per-repo exception comment inside the caller.** `parseCaller` strips comments on purpose, and a public per-repo file is a worse place for policy than one list in Ward.
 
-> Stress-tested 2026-10-02 (skill 0b01b4c): 15 applied, 4 adapted, 3 decided by me.
+> Stress-tested 2026-10-02 (skill 0b01b4c): 15 applied, 4 adapted, 3 decided by me (all as recommended, same day).
