@@ -215,3 +215,27 @@ test("the gate fails on a failed or cancelled module and lets a skipped one thro
   );
   assert.doesNotMatch(gate.body, /'skipped'/);
 });
+
+test("Ward's own auto-merge job pins a released commit and runs only for Dependabot PRs", () => {
+  const job = jobsOf(".github/workflows/ward.yml").find((j) => j.name === "automerge");
+  assert.ok(job, "no automerge job in ward.yml");
+  assert.match(
+    job.body,
+    /^ {4}uses: malinfossum\/ward\/\.github\/workflows\/dependabot-automerge\.yml@[0-9a-f]{40} # v\d+\.\d+\.\d+$/m,
+  );
+  assert.match(
+    job.body,
+    /^ {4}if: github\.event_name == 'pull_request' && github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'$/m,
+  );
+  assert.match(job.body, /^ {6}contents: write$/m);
+  assert.match(job.body, /^ {6}pull-requests: write$/m);
+  // Not asserted: that the template pins the same release. Dependabot bumps
+  // ward.yml alone, and that PR must stay green so I can merge it.
+});
+
+test("no template carries an em dash", () => {
+  for (const file of readdirSync("templates")) {
+    const emDash = new RegExp(String.fromCharCode(0x2014));
+    assert.doesNotMatch(readFileSync(join("templates", file), "utf8"), emDash, file);
+  }
+});
