@@ -46,3 +46,24 @@ test("a stack no module covers is reported as planned", () => {
 test("a repo with only docs has no stacks", () => {
   assert.deepEqual(names(["README.md", "docs/a.md"]), []);
 });
+
+test("every exception names a public repo of mine, a shipped module, and a dated reason", () => {
+  const stacks = loadStacks();
+  const shipped = new Set(stacks.modules.filter((m) => m.status === "shipped").map((m) => m.name));
+  const entries = Object.entries(stacks.exceptions ?? {});
+  assert.ok(entries.length >= 1);
+  for (const [repo, modules] of entries) {
+    assert.match(repo, /^(malinfossum|rookdex|wendhq)\/[\w.-]+$/, repo);
+    for (const [key, reason] of Object.entries(modules)) {
+      assert.ok(
+        shipped.has(key) || ["caller", "ruleset", "baseline"].includes(key),
+        `${repo}: ${key} is neither a shipped module nor a deferrable finding kind`,
+      );
+      assert.match(
+        reason,
+        /\(\d{4}-\d{2}-\d{2}\)\.$/,
+        `${repo}/${key}: the reason ends with a date`,
+      );
+    }
+  }
+});

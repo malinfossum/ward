@@ -17,11 +17,12 @@ run emails me.
 | `inputs` | Files of a stack are on `main` but the caller leaves that module off, or an input points at a path that is not there |
 | `suppression` | A `<NuGetAuditSuppress>` without a `YYYY-MM-DD` dated comment beside or above it |
 | `runtime` | A `<TargetFramework>` or the caller's `node-version` within 90 days of end of life, or past it |
-| `canary` | Ward's `canary.yml` last completed run is not `success` or is older than 8 days |
+| `canary` | Ward's `canary.yml` last completed run is not `success`, is older than 8 days, or is missing (a 404) |
+| `exception` | Warning: a module the repo keeps off on purpose, listed in `stacks.json` under `exceptions` with a dated reason; also a stale exception (no files for that module, or the input is set), and a `caller`, `ruleset` or `baseline` finding deferred on a joint repo |
 | `error` | The audit could not read the repo (a GitHub API error); the other repos still report |
 
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see
-`stacks.json`), `token` (the token cannot read a repo's settings; on my own repos, and on an org
+`stacks.json`), `exception` (a module kept off on purpose, listed with its reason), `token` (the token cannot read a repo's settings; on my own repos, and on an org
 with its own token, this fails the run instead), and whatever `--warn-kinds` names for a run: the
 workflow passes `--warn-kinds caller,baseline,ruleset` until Plan 5 rolls the caller and the
 settings out, so a red run means new drift of another kind, not the rollout.

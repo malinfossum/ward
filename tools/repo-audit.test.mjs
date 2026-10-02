@@ -11,6 +11,7 @@ import {
   checkRuntimes,
   checkSuppressions,
   EOL,
+  exceptionsFor,
   expectsAdminRead,
   fetchRepoData,
   findSuppressions,
@@ -939,4 +940,89 @@ test("live: Ward itself passes the baseline, caller and input checks", {
     ["baseline", "ruleset", "caller", "inputs"].includes(kind),
   );
   assert.deepEqual(hard, []);
+});
+
+const STACKS_WITH_EXCEPTIONS = {
+  ...stacks,
+  exceptions: {
+    "malinfossum/Backend-Course": { dotnet: "Course repo, one solution per week (2026-10-02)." },
+  },
+};
+
+test("exceptionsFor matches the repo name case-insensitively and is empty otherwise", () => {
+  assert.deepEqual(exceptionsFor("malinfossum/backend-course", STACKS_WITH_EXCEPTIONS), {
+    dotnet: "Course repo, one solution per week (2026-10-02).",
+  });
+  assert.deepEqual(exceptionsFor("malinfossum/other", STACKS_WITH_EXCEPTIONS), {});
+  assert.deepEqual(exceptionsFor("malinfossum/backend-course", { ...stacks, exceptions: {} }), {});
+});
+
+test("an exception can also defer a caller, ruleset or baseline finding on a joint repo", () => {
+  const paths = ["Wend.slnx"];
+  const deferred = {
+    ...stacks,
+    exceptions: { "wendhq/wend": { ruleset: "Waiting for the co-owner (2026-10-02)." } },
+  };
+  const { findings } = auditRepo(
+    {
+      repo: "wendhq/wend",
+      tree: paths,
+      caller: null,
+      files: {},
+      baseline: { ...baseline, rules: [] },
+      self: false,
+    },
+    { stacks: deferred, today: "2026-10-02" },
+  );
+  assert.ok(!findings.some(([kind]) => kind === "ruleset"), "ruleset findings are deferred");
+  assert.ok(findings.some(([kind, msg]) => kind === "exception" && /ruleset .*deferred/.test(msg)));
+  assert.ok(
+    findings.some(([kind]) => kind === "caller"),
+    "an undeferred kind still fails",
+  );
+});
+
+test("an excepted module that is off is a warning naming the reason, never an inputs finding", () => {
+  const paths = ["Week 01/A.slnx", "Week 02/B.slnx"];
+  const detected = detectStacks(paths, stacks);
+  const exceptions = { dotnet: "Course repo, one solution per week (2026-10-02)." };
+  const findings = checkInputs({ node: "", dotnet: "" }, detected, paths, exceptions);
+  assert.deepEqual(kinds(findings), ["exception"]);
+  assert.match(findings[0][1], /dotnet is off by exception: Course repo/);
+  assert.ok(WARN_KINDS.has("exception"));
+  // Without the exception the same caller is an inputs failure.
+  assert.deepEqual(kinds(checkInputs({ node: "", dotnet: "" }, detected, paths)), ["inputs"]);
+});
+
+test("a stale exception is reported: no files for that module, or the input is set anyway", () => {
+  const exceptions = { dotnet: "Gone (2026-10-02)." };
+  const none = checkInputs(
+    { node: "." },
+    detectStacks(["package.json"], stacks),
+    ["package.json"],
+    exceptions,
+  );
+  assert.deepEqual(kinds(none), ["exception"]);
+  assert.match(none[0][1], /stale exception for dotnet/);
+  const paths = ["A.slnx"];
+  const on = checkInputs({ dotnet: "A.slnx" }, detectStacks(paths, stacks), paths, exceptions);
+  assert.deepEqual(kinds(on), ["exception"]);
+  assert.match(on[0][1], /stale exception for dotnet/);
+});
+
+test("auditRepo passes the repo's exceptions through", () => {
+  const paths = ["Week 01/A.slnx"];
+  const caller = [
+    "jobs:",
+    "  ward:",
+    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
+    "    with:",
+    '      dotnet: ""',
+  ].join("\n");
+  const { findings } = auditRepo(
+    { repo: "malinfossum/backend-course", tree: paths, caller, files: {}, baseline, self: false },
+    { stacks: STACKS_WITH_EXCEPTIONS, today: "2026-10-02" },
+  );
+  assert.ok(findings.some(([kind]) => kind === "exception"));
+  assert.ok(!findings.some(([kind]) => kind === "inputs"));
 });

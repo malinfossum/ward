@@ -1,6 +1,21 @@
 {
-  "$comment": "Detection rules for Ward's stack modules. A path matches a module when its basename equals a pattern, or ends with the pattern's suffix when the pattern starts with `*`, and no ignore prefix appears as a path segment. status shipped: ci.yml has the module and the caller input named here must be set. status planned: files are reported as an uncovered stack until the module ships (Plan 6). Plan 3's skill reads the same file to write a caller.",
+  "$comment": "Detection rules for Ward's stack modules. A path matches a module when its basename equals a pattern, or ends with the pattern's suffix when the pattern starts with `*`, and no ignore prefix appears as a path segment. status shipped: ci.yml has the module and the caller input named here must be set. status planned: files are reported as an uncovered stack until the module ships (Plan 6). Plan 3's skill reads the same file to write a caller. exceptions: repos where a detected shipped module stays off on purpose, keyed by full repo name, with a reason ending in a date in parentheses; the audit reports each one as an exception warning every week so none outlives its reason, and reports a stale one (no files, or the input is set) the same way. A key may also be a finding kind (caller, ruleset, baseline) to defer that kind on a joint repo whose co-owner has not agreed yet.",
   "ignore": ["node_modules/", "bin/", "obj/", ".git/"],
+  "exceptions": {
+    "malinfossum/backend-course": {
+      "dotnet": "Course repo with one solution per week and no single entry point (2026-10-02)."
+    },
+    "malinfossum/devops-course": {
+      "dotnet": "Course repo; the one project has no tests (2026-10-02)."
+    },
+    "malinfossum/workbench": {
+      "node": "Scaffold copies; workbench's own ci.yml tests the tools (2026-10-02).",
+      "dotnet": "Scaffold copies; workbench's own ci.yml tests the tools (2026-10-02)."
+    },
+    "malinfossum/ember-black": {
+      "node": "A VS Code theme: a build script and nothing to lint or test (2026-10-02)."
+    }
+  },
   "modules": [
     { "name": "node", "input": "node", "status": "shipped", "files": ["package.json"] },
     {
