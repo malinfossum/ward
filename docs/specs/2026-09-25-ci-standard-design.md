@@ -227,7 +227,7 @@ Every repo runs Ward's code, so Ward is the most trusted repo I own and gets the
   merges that bump.
 - **Ward's own auto-merge job** calls `dependabot-automerge.yml` at a released SHA, never by `./` path:
   a `./` reference runs the PR head's version of the workflow, with write access, before I have
-  reviewed it. Ward gets the job with `v1.0.0` (Plan 5), and a test bans `./` references to
+  reviewed it. Ward gets the job at a released commit (`v1.1.0` today, Plan 5), and a test bans `./` references to
   `dependabot-automerge.yml`.
 - **Ward's own rulesets:** the branch ruleset from the baseline, plus a tag ruleset on `v*` that blocks
   creation, updates and deletion, with repository admin as the only bypass (moving `v1` is part of every

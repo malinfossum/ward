@@ -398,6 +398,9 @@ export function lastRunProblem(workflow, runs, now, { requireSuccess = true } = 
     return `The latest ${workflow} run ended ${run.conclusion}: ${run.html_url}`;
   }
   const days = Math.floor((Date.parse(now) - Date.parse(run.updated_at)) / DAY);
+  if (Number.isNaN(days)) {
+    return `The latest ${workflow} run has no readable date (${run.updated_at}); GitHub may have disabled the schedule.`;
+  }
   if (!(days <= MAX_AGE_DAYS)) {
     return `The latest ${workflow} run is ${days} days old (${run.updated_at}); GitHub may have disabled the schedule.`;
   }
@@ -434,6 +437,17 @@ export function auditRepo({ repo = "", tree, caller, files, baseline, self }, { 
       ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[kind]})`]
       : [kind, message],
   );
+  // A deferral with nothing left to defer is stale, or a later regression of
+  // that kind would stay a warning for good. Unread settings give a token
+  // finding, never a baseline one, so the baseline key is not judged then.
+  for (const kind of DEFERRABLE) {
+    if (!exceptions[kind] || findings.some(([found]) => found === kind)) continue;
+    if (kind === "baseline" && baseline?.unread) continue;
+    deferred.push([
+      "exception",
+      `A stale deferral for ${kind}: nothing to defer; remove it from stacks.json.`,
+    ]);
+  }
   return { findings: deferred, suppressions };
 }
 

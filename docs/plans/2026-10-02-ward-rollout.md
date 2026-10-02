@@ -971,12 +971,12 @@ Expected: `success`; the summary's `malinfossum/ward canary` section has no find
 
 ```bash
 git switch main && git pull --ff-only
-git tag -a v1.2.0 -m "Ward 1.2.0: canary on the published v1, watchdogs, audit exceptions, Ward's own auto-merge"
-git tag -fa v1 -m "Ward v1: currently v1.2.0" v1.2.0^{commit}
-git push origin v1.2.0
-git push --force origin v1
-git rev-parse v1.2.0^{commit}
-gh release create v1.2.0 --verify-tag --title "v1.2.0" --latest --notes "The canary runs the published v1 every Monday and after every release; the audit and the canary watch each other; stacks.json carries dated exceptions; Ward's own ward.yml runs the auto-merge job. No change to ci.yml's inputs or checks."
+git tag -a v1.2.0 -m "Ward 1.2.0: canary on the published v1, watchdogs, audit exceptions, Ward's own auto-merge" \
+  && git tag -fa v1 -m "Ward v1: currently v1.2.0" v1.2.0^{commit} \
+  && git push origin v1.2.0 \
+  && git push --force origin v1 \
+  && git rev-parse v1.2.0^{commit} \
+  && gh release create v1.2.0 --verify-tag --title "v1.2.0" --latest --notes "The canary runs the published v1 every Monday and after every release; the audit and the canary watch each other; stacks.json carries dated exceptions; Ward's own ward.yml runs the auto-merge job. No change to ci.yml's inputs or checks."
 gh api repos/malinfossum/ward/git/ref/tags/v1 --jq '.object.sha' | xargs -I{} gh api repos/malinfossum/ward/git/tags/{} --jq '.object.sha'
 ```
 Expected: the last command prints the same commit SHA as `git rev-parse v1.2.0^{commit}`. Publishing the release starts one canary run, after `v1` has moved, so it tests the new release:
