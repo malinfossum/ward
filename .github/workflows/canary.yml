@@ -1,0 +1,70 @@
+# Runs the published @v1 the way every other repo does: ci.yml@v1 against the
+# good fixtures, and the v1 tag's own fixture suite, which rejects the broken
+# ones. A reusable-workflow job cannot be marked expected-to-fail, and a canary
+# that is red by design every Monday would train me to ignore it, so the
+# broken fixtures go through the published scripts rather than the published
+# gate. Weekly, and on every published release, which I create after moving
+# v1, so a release that breaks consumers shows up before Monday. The watchdog
+# job fails when the weekly audit has gone quiet; the audit checks this
+# workflow the same way.
+name: Canary
+
+on:
+  schedule:
+    - cron: "47 6 * * 1"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  ASTRO_TELEMETRY_DISABLED: "1"
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  # Exactly a consumer's call: the published tag, never this checkout.
+  published:
+    uses: malinfossum/ward/.github/workflows/ci.yml@v1
+    with:
+      node: fixtures/node-ok
+      dotnet: fixtures/dotnet-ok
+
+  rejects:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v1
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - run: npm ci
+      - name: The published scripts reject the broken fixtures
+        run: npm run test:fixtures
+
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: The weekly audit completed a run within 8 days
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node tools/watchdog.mjs repo-audit.yml

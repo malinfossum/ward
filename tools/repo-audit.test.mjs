@@ -11,10 +11,12 @@ import {
   checkRuntimes,
   checkSuppressions,
   EOL,
+  exceptionsFor,
   expectsAdminRead,
   fetchRepoData,
   findSuppressions,
   hardCount,
+  lastRunProblem,
   parseCaller,
   redactEmails,
   report,
@@ -437,7 +439,7 @@ test("a healthy canary run passes", () => {
   assert.deepEqual(checkCanary(runs, "2026-09-30T08:00:00Z"), []);
 });
 
-test("a red, stale or never-run canary is a finding; a missing canary is only a warning", () => {
+test("a red, stale, never-run or missing canary is a hard finding", () => {
   const red = {
     workflow_runs: [{ conclusion: "failure", updated_at: "2026-09-29T06:00:00Z", html_url: "u" }],
   };
@@ -450,12 +452,44 @@ test("a red, stale or never-run canary is a finding; a missing canary is only a 
     checkCanary({ total_count: 0, workflow_runs: [] }, "2026-09-30T08:00:00Z")[0][1],
     /never completed/,
   );
+  // Since Plan 5 the canary exists: a 404 is a deleted or renamed canary.
   const missing = checkCanary(null, "2026-09-30T08:00:00Z");
-  assert.deepEqual(kinds(missing), ["canary-missing"]);
-  assert.ok(WARN_KINDS.has("canary-missing"));
-  for (const findings of [checkCanary(red, "x"), checkCanary(stale, "2026-09-30T08:00:00Z")]) {
+  assert.deepEqual(kinds(missing), ["canary"]);
+  assert.match(missing[0][1], /No canary\.yml in malinfossum\/ward/);
+  assert.ok(!WARN_KINDS.has("canary-missing"));
+  for (const findings of [
+    missing,
+    checkCanary(red, "x"),
+    checkCanary(stale, "2026-09-30T08:00:00Z"),
+  ]) {
     assert.ok(!WARN_KINDS.has(findings[0][0]));
   }
+});
+
+test("lastRunProblem: liveness only when requireSuccess is off; a bad date is never fresh", () => {
+  const fresh = { conclusion: "failure", updated_at: "2026-09-29T06:00:00Z", html_url: "u" };
+  const runs = { workflow_runs: [fresh] };
+  assert.match(lastRunProblem("repo-audit.yml", runs, "2026-09-30T08:00:00Z"), /ended failure/);
+  assert.equal(
+    lastRunProblem("repo-audit.yml", runs, "2026-09-30T08:00:00Z", { requireSuccess: false }),
+    null,
+  );
+  const old = {
+    workflow_runs: [{ ...fresh, conclusion: "success", updated_at: "2026-09-21T06:00:00Z" }],
+  };
+  assert.match(
+    lastRunProblem("repo-audit.yml", old, "2026-09-30T08:00:00Z", { requireSuccess: false }),
+    /repo-audit\.yml run is 9 days old/,
+  );
+  assert.match(lastRunProblem("x.yml", null, "2026-09-30T08:00:00Z"), /never completed/);
+  assert.match(
+    lastRunProblem("x.yml", { workflow_runs: [{ ...fresh, conclusion: "success" }] }, "x"),
+    /no readable date/,
+  );
+  const undated = { workflow_runs: [{ ...fresh, conclusion: "success", updated_at: undefined }] };
+  const problem = lastRunProblem("x.yml", undated, "2026-09-30T08:00:00Z");
+  assert.match(problem, /no readable date/);
+  assert.doesNotMatch(problem, /NaN/);
 });
 
 test("auditRepo runs every check over one repo's data", () => {
@@ -512,7 +546,7 @@ test("a kind named in --warn-kinds is a warning; the same kind without the flag 
 const NOW = "2026-09-30T06:00:00Z";
 
 test("canaryFindings: only a 404 means no canary; 401 and 403 are a token finding", () => {
-  assert.deepEqual(kinds(canaryFindings(404, null, NOW)), ["canary-missing"]);
+  assert.deepEqual(kinds(canaryFindings(404, null, NOW)), ["canary"]);
   for (const status of [401, 403]) {
     const findings = canaryFindings(status, null, NOW);
     assert.deepEqual(kinds(findings), ["token"]);
@@ -527,7 +561,7 @@ test("a canary that cannot be read fails the run on my own repo", () => {
   const own = warnKindsFor(WARD.split("/")[0], {});
   assert.equal(hardCount(canaryFindings(403, null, NOW), own), 1);
   assert.equal(hardCount(canaryFindings(401, null, NOW), own), 1);
-  assert.equal(hardCount(canaryFindings(404, null, NOW), own), 0);
+  assert.equal(hardCount(canaryFindings(404, null, NOW), own), 1);
 });
 
 test("the suppression table redacts email addresses from the public reason", () => {
@@ -818,7 +852,15 @@ test("an error on an archived repo is a warning in the archived section, never a
   const stub = stubFetch([
     [/\/users\/rookdex\/repos/, 200, [listed]],
     [/^\/repos\/rookdex\/old$/, 500],
-    [/\/canary\.yml\/runs/, 404],
+    [
+      /\/canary\.yml\/runs/,
+      200,
+      {
+        workflow_runs: [
+          { conclusion: "success", updated_at: new Date().toISOString(), html_url: "u" },
+        ],
+      },
+    ],
   ]);
   try {
     const { lines, result } = await quietly(() =>
@@ -858,7 +900,15 @@ test("an org without its own token: one token finding naming the secret, and the
     [/\/git\/trees\/main/, 200, { truncated: false, tree: [] }],
     [/\/contents\//, 404],
     [/\/rules\/branches\/main$/, 200, baseline.rules],
-    [/\/canary\.yml\/runs/, 404],
+    [
+      /\/canary\.yml\/runs/,
+      200,
+      {
+        workflow_runs: [
+          { conclusion: "success", updated_at: new Date().toISOString(), html_url: "u" },
+        ],
+      },
+    ],
   ]);
   try {
     const env = { GITHUB_TOKEN: "read", WARD_AUDIT_TOKEN: "mine" };
@@ -894,4 +944,146 @@ test("live: Ward itself passes the baseline, caller and input checks", {
     ["baseline", "ruleset", "caller", "inputs"].includes(kind),
   );
   assert.deepEqual(hard, []);
+});
+
+const STACKS_WITH_EXCEPTIONS = {
+  ...stacks,
+  exceptions: {
+    "malinfossum/Backend-Course": { dotnet: "Course repo, one solution per week (2026-10-02)." },
+  },
+};
+
+test("exceptionsFor matches the repo name case-insensitively and is empty otherwise", () => {
+  assert.deepEqual(exceptionsFor("malinfossum/backend-course", STACKS_WITH_EXCEPTIONS), {
+    dotnet: "Course repo, one solution per week (2026-10-02).",
+  });
+  assert.deepEqual(exceptionsFor("malinfossum/other", STACKS_WITH_EXCEPTIONS), {});
+  assert.deepEqual(exceptionsFor("malinfossum/backend-course", { ...stacks, exceptions: {} }), {});
+});
+
+test("an exception can also defer a caller, ruleset or baseline finding on a joint repo", () => {
+  const paths = ["Wend.slnx"];
+  const deferred = {
+    ...stacks,
+    exceptions: { "wendhq/wend": { ruleset: "Waiting for the co-owner (2026-10-02)." } },
+  };
+  const { findings } = auditRepo(
+    {
+      repo: "wendhq/wend",
+      tree: paths,
+      caller: null,
+      files: {},
+      baseline: { ...baseline, rules: [] },
+      self: false,
+    },
+    { stacks: deferred, today: "2026-10-02" },
+  );
+  assert.ok(!findings.some(([kind]) => kind === "ruleset"), "ruleset findings are deferred");
+  assert.ok(findings.some(([kind, msg]) => kind === "exception" && /ruleset .*deferred/.test(msg)));
+  assert.ok(
+    findings.some(([kind]) => kind === "caller"),
+    "an undeferred kind still fails",
+  );
+  const exceptionFindings = findings.filter(([kind]) => kind === "exception");
+  assert.ok(
+    !exceptionFindings.some(([, msg]) => /stale exception/.test(msg)),
+    "a deferral key is not reported as a stale module exception",
+  );
+});
+
+test("a deferral with nothing left to defer is reported as stale", () => {
+  const stale = {
+    ...stacks,
+    exceptions: { "wendhq/wend": { ruleset: "Waiting for the co-owner (2026-10-02)." } },
+  };
+  const caller = [
+    "jobs:",
+    "  ward:",
+    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
+    "    with:",
+    "      node: .",
+  ].join("\n");
+  const audit = (baselineData) =>
+    auditRepo(
+      {
+        repo: "wendhq/wend",
+        tree: ["package.json"],
+        caller,
+        files: {},
+        baseline: baselineData,
+        self: false,
+      },
+      { stacks: stale, today: "2026-10-02" },
+    ).findings;
+  // The ruleset is fine now, so the key defers nothing.
+  const clean = audit(baseline);
+  assert.ok(
+    clean.some(([kind, msg]) => kind === "exception" && /stale deferral for ruleset/.test(msg)),
+    "a deferral key with no finding of that kind is reported",
+  );
+  // While there is still something to defer, the key is live, not stale.
+  const live = audit({ ...baseline, rules: [] });
+  assert.ok(!live.some(([, msg]) => /stale deferral/.test(msg)));
+  // Unread settings give a token finding, so a baseline key is not judged then.
+  const unreadStacks = {
+    ...stacks,
+    exceptions: { "wendhq/wend": { baseline: "Waiting for the co-owner (2026-10-02)." } },
+  };
+  const unread = auditRepo(
+    {
+      repo: "wendhq/wend",
+      tree: [],
+      caller: null,
+      files: {},
+      baseline: { unread: "AUDIT_TOKEN_WENDHQ is not set, so the settings were not read." },
+      self: false,
+    },
+    { stacks: unreadStacks, today: "2026-10-02" },
+  ).findings;
+  assert.ok(!unread.some(([, msg]) => /stale deferral/.test(msg)));
+});
+
+test("an excepted module that is off is a warning naming the reason, never an inputs finding", () => {
+  const paths = ["Week 01/A.slnx", "Week 02/B.slnx"];
+  const detected = detectStacks(paths, stacks);
+  const exceptions = { dotnet: "Course repo, one solution per week (2026-10-02)." };
+  const findings = checkInputs({ node: "", dotnet: "" }, detected, paths, exceptions);
+  assert.deepEqual(kinds(findings), ["exception"]);
+  assert.match(findings[0][1], /dotnet is off by exception: Course repo/);
+  assert.ok(WARN_KINDS.has("exception"));
+  // Without the exception the same caller is an inputs failure.
+  assert.deepEqual(kinds(checkInputs({ node: "", dotnet: "" }, detected, paths)), ["inputs"]);
+});
+
+test("a stale exception is reported: no files for that module, or the input is set anyway", () => {
+  const exceptions = { dotnet: "Gone (2026-10-02)." };
+  const none = checkInputs(
+    { node: "." },
+    detectStacks(["package.json"], stacks),
+    ["package.json"],
+    exceptions,
+  );
+  assert.deepEqual(kinds(none), ["exception"]);
+  assert.match(none[0][1], /stale exception for dotnet/);
+  const paths = ["A.slnx"];
+  const on = checkInputs({ dotnet: "A.slnx" }, detectStacks(paths, stacks), paths, exceptions);
+  assert.deepEqual(kinds(on), ["exception"]);
+  assert.match(on[0][1], /stale exception for dotnet/);
+});
+
+test("auditRepo passes the repo's exceptions through", () => {
+  const paths = ["Week 01/A.slnx"];
+  const caller = [
+    "jobs:",
+    "  ward:",
+    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
+    "    with:",
+    '      dotnet: ""',
+  ].join("\n");
+  const { findings } = auditRepo(
+    { repo: "malinfossum/backend-course", tree: paths, caller, files: {}, baseline, self: false },
+    { stacks: STACKS_WITH_EXCEPTIONS, today: "2026-10-02" },
+  );
+  assert.ok(findings.some(([kind]) => kind === "exception"));
+  assert.ok(!findings.some(([kind]) => kind === "inputs"));
 });

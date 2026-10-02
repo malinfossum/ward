@@ -1,6 +1,6 @@
 {
   "name": "ward",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Shared CI, security and accessibility checks for all my repos.",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -163,4 +163,79 @@ test("a workflow that reads a secret runs only on a schedule or by hand", () => 
     assert.deepEqual(triggers, ["schedule", "workflow_dispatch"], file);
   }
   assert.equal(checked, 1, "repo-audit.yml is the one workflow that reads a secret");
+});
+
+test("the canary calls the published @v1 for the good fixtures and the v1 tag's fixture suite for the broken ones", () => {
+  const text = readWorkflow(".github/workflows/canary.yml");
+  assert.match(text, /^ {4}uses: malinfossum\/ward\/\.github\/workflows\/ci\.yml@v1$/m);
+  assert.doesNotMatch(
+    text,
+    /uses: \.\/\.github\/workflows\//,
+    "the canary must test the tag, not this checkout",
+  );
+  assert.match(text, /node: fixtures\/node-ok/);
+  assert.match(text, /dotnet: fixtures\/dotnet-ok/);
+  assert.match(text, /^ {10}ref: v1$/m);
+  assert.match(text, /npm run test:fixtures/);
+  assert.match(text, /node tools\/watchdog\.mjs repo-audit\.yml/);
+  const on = text.match(/^on:\r?\n((?: {2}.*\r?\n?)+)/m)?.[1] ?? "";
+  for (const trigger of ["schedule", "release", "workflow_dispatch"]) {
+    assert.match(on, new RegExp(`^ {2}${trigger}:`, "m"), trigger);
+  }
+  assert.match(on, /types: \[published\]/);
+  // A tag push would hand identity the old tag object as `before`, which the
+  // checkout cannot fetch once v1 has moved; a release has no `before`.
+  assert.doesNotMatch(on, /pull_request|push:/);
+});
+
+// ci.yml's node job runs `npm ci` and caches on <dir>/package-lock.json, so a
+// fixture named as a `node:` input without a lock file fails before any check runs.
+test("every node fixture a Ward caller names has a package-lock.json", () => {
+  let checked = 0;
+  for (const file of [".github/workflows/canary.yml", ".github/workflows/ward.yml"]) {
+    for (const match of readWorkflow(file).matchAll(/^\s+node: (fixtures\/\S+)$/gm)) {
+      checked++;
+      assert.ok(
+        existsSync(join(match[1], "package-lock.json")),
+        `${file}: ${match[1]} has no lock file`,
+      );
+    }
+  }
+  assert.ok(checked > 0, "no fixture node input found");
+});
+
+test("the gate fails on a failed or cancelled module and lets a skipped one through", () => {
+  const gate = jobsOf(".github/workflows/ci.yml").find((job) => job.name === "gate");
+  assert.ok(gate, "no gate job in ci.yml");
+  assert.match(gate.body, /needs: \[identity, node, dotnet\]/);
+  assert.match(gate.body, /if: always\(\)/);
+  assert.match(
+    gate.body,
+    /contains\(needs\.\*\.result, 'failure'\) \|\| contains\(needs\.\*\.result, 'cancelled'\)/,
+  );
+  assert.doesNotMatch(gate.body, /'skipped'/);
+});
+
+test("Ward's own auto-merge job pins a released commit and runs only for Dependabot PRs", () => {
+  const job = jobsOf(".github/workflows/ward.yml").find((j) => j.name === "automerge");
+  assert.ok(job, "no automerge job in ward.yml");
+  assert.match(
+    job.body,
+    /^ {4}uses: malinfossum\/ward\/\.github\/workflows\/dependabot-automerge\.yml@[0-9a-f]{40} # v\d+\.\d+\.\d+$/m,
+  );
+  assert.match(
+    job.body,
+    /^ {4}if: github\.event_name == 'pull_request' && github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'$/m,
+  );
+  assert.match(job.body, /^ {6}contents: write$/m);
+  assert.match(job.body, /^ {6}pull-requests: write$/m);
+  // Not asserted: that the template pins the same release. Dependabot bumps
+  // ward.yml alone, and that PR must stay green so I can merge it.
+});
+
+test("no template carries an em dash", () => {
+  for (const file of readdirSync("templates")) {
+    const emDash = new RegExp(String.fromCharCode(0x2014));
+    assert.doesNotMatch(readFileSync(join("templates", file), "utf8"), emDash, file);
+  }
 });

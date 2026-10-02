@@ -20,9 +20,23 @@ const AUTOMERGE_PINNED =
   /^malinfossum\/ward\/\.github\/workflows\/dependabot-automerge\.yml@[0-9a-f]{40}$/;
 
 // Findings of these kinds are reported but never fail the run. canary-missing
-// leaves this set in Plan 5, once canary.yml exists: from then on a missing
-// canary is a failure, not "not yet".
-export const WARN_KINDS = new Set(["uncovered", "canary-missing", "token"]);
+// left this set with Plan 5: a 404 for canary.yml is a deleted or renamed
+// canary now, and fails like a red one. exception: a module I turned off on
+// purpose, listed in stacks.json with a dated reason.
+export const WARN_KINDS = new Set(["uncovered", "exception", "token"]);
+
+// Finding kinds an exception may defer on a joint repo, next to the module names.
+const DEFERRABLE = ["caller", "ruleset", "baseline"];
+
+// The modules a repo keeps off on purpose, from stacks.json. Repo names on
+// GitHub are case-insensitive, so the lookup is too.
+export function exceptionsFor(repo, stacks) {
+  const wanted = repo.toLowerCase();
+  const hit = Object.entries(stacks.exceptions ?? {}).find(
+    ([name]) => name.toLowerCase() === wanted,
+  );
+  return hit ? hit[1] : {};
+}
 
 const indentOf = (line) => line.match(/^\s*/)[0].length;
 const unquote = (value) =>
@@ -102,8 +116,9 @@ const sample = (files) => files.slice(0, 3).join(", ");
 // point at something on the default branch. A merged PR that turned a module
 // off or moved a project shows up here. inputs is null when there is no caller;
 // then only uncovered stacks are reported, the caller finding covers the rest.
-export function checkInputs(inputs, detected, paths) {
+export function checkInputs(inputs, detected, paths, exceptions = {}) {
   const findings = [];
+  const seen = new Set();
   for (const stack of detected) {
     if (stack.status !== "shipped") {
       findings.push([
@@ -112,10 +127,28 @@ export function checkInputs(inputs, detected, paths) {
       ]);
       continue;
     }
-    if (inputs && !(inputs[stack.input] ?? "")) {
+    seen.add(stack.name);
+    const reason = exceptions[stack.name];
+    const off = inputs && !(inputs[stack.input] ?? "");
+    if (off && reason) {
+      findings.push(["exception", `${stack.name} is off by exception: ${reason}`]);
+    } else if (off) {
       findings.push([
         "inputs",
         `${stack.name} files (${sample(stack.files)}) but the caller's ${stack.input} input is empty.`,
+      ]);
+    } else if (reason && inputs) {
+      findings.push([
+        "exception",
+        `A stale exception for ${stack.name}: the caller's ${stack.input} input is set; remove it from stacks.json.`,
+      ]);
+    }
+  }
+  for (const [module, reason] of Object.entries(exceptions)) {
+    if (!seen.has(module) && !DEFERRABLE.includes(module)) {
+      findings.push([
+        "exception",
+        `A stale exception for ${module}: no ${module} files are on the default branch (${reason}); remove it from stacks.json.`,
       ]);
     }
   }
@@ -351,41 +384,71 @@ export function checkRuntimes({ frameworks, nodeVersion, today }) {
   return findings;
 }
 
-// runs: null when Ward has no canary.yml yet (the API answers 404), else the
-// workflow-runs response for the latest completed run. The canary arrives in
-// Plan 5; until then a missing workflow is a warning, not a failure.
-export function checkCanary(runs, now) {
-  if (runs === null) return [["canary-missing", `No ${CANARY} in ${WARD} yet (Plan 5).`]];
-  const run = runs.workflow_runs?.[0];
-  if (!run) return [["canary", `${CANARY} has never completed a run.`]];
-  if (run.conclusion !== "success") {
-    return [["canary", `The latest canary run ended ${run.conclusion}: ${run.html_url}`]];
+// What is wrong with the latest completed run of one of Ward's own workflows:
+// never ran, ended red, or older than MAX_AGE_DAYS, which is what a schedule
+// GitHub turned off looks like. runs is the workflow-runs response for
+// per_page=1&status=completed. requireSuccess false checks liveness only: the
+// canary asks this about the audit, and a red audit has already failed and
+// emailed on its own, so reporting it twice would only add a red canary. A
+// date that does not parse reads as stale, never as fresh.
+export function lastRunProblem(workflow, runs, now, { requireSuccess = true } = {}) {
+  const run = runs?.workflow_runs?.[0];
+  if (!run) return `${workflow} has never completed a run.`;
+  if (requireSuccess && run.conclusion !== "success") {
+    return `The latest ${workflow} run ended ${run.conclusion}: ${run.html_url}`;
   }
   const days = Math.floor((Date.parse(now) - Date.parse(run.updated_at)) / DAY);
-  if (days > MAX_AGE_DAYS) {
-    return [
-      [
-        "canary",
-        `The latest canary run is ${days} days old (${run.updated_at}); GitHub may have disabled the schedule.`,
-      ],
-    ];
+  if (Number.isNaN(days)) {
+    return `The latest ${workflow} run has no readable date (${run.updated_at}); GitHub may have disabled the schedule.`;
   }
-  return [];
+  if (!(days <= MAX_AGE_DAYS)) {
+    return `The latest ${workflow} run is ${days} days old (${run.updated_at}); GitHub may have disabled the schedule.`;
+  }
+  return null;
+}
+
+// runs: null when the API answers 404 for canary.yml, else the workflow-runs
+// response for the latest completed run. A missing canary fails like a red
+// one: it exists since Plan 5, so a 404 means it was deleted or renamed.
+export function checkCanary(runs, now) {
+  if (runs === null) return [["canary", `No ${CANARY} in ${WARD}.`]];
+  const problem = lastRunProblem(CANARY, runs, now);
+  return problem ? [["canary", problem]] : [];
 }
 
 // One repo, all checks. tree: blob paths on the default branch; caller: the
 // text of .github/workflows/ward.yml or null; files: Directory.Build.props and
-// .csproj texts by path; baseline: see checkBaseline; self: the repo is Ward.
-export function auditRepo({ tree, caller, files, baseline, self }, { stacks, today }) {
+// .csproj texts by path; baseline: see checkBaseline; self: the repo is Ward;
+// repo: full name, for the exception lookup.
+export function auditRepo({ repo = "", tree, caller, files, baseline, self }, { stacks, today }) {
+  const exceptions = exceptionsFor(repo, stacks);
   const findings = [...checkBaseline(baseline), ...checkCaller(caller, { self })];
   const parsed = caller == null ? null : parseCaller(caller);
   const inputs = parsed?.inputs ?? null;
-  findings.push(...checkInputs(inputs, detectStacks(tree, stacks), tree));
+  findings.push(...checkInputs(inputs, detectStacks(tree, stacks), tree, exceptions));
   const suppressions = findSuppressions(files);
   findings.push(...checkSuppressions(suppressions));
   const nodeVersion = inputs?.node ? inputs["node-version"] || "24" : "";
   findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
-  return { findings, suppressions };
+  // A joint repo can defer a whole kind until the co-owner agrees; the
+  // weekly warning keeps it visible and dated.
+  const deferred = findings.map(([kind, message]) =>
+    DEFERRABLE.includes(kind) && exceptions[kind]
+      ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[kind]})`]
+      : [kind, message],
+  );
+  // A deferral with nothing left to defer is stale, or a later regression of
+  // that kind would stay a warning for good. Unread settings give a token
+  // finding, never a baseline one, so the baseline key is not judged then.
+  for (const kind of DEFERRABLE) {
+    if (!exceptions[kind] || findings.some(([found]) => found === kind)) continue;
+    if (kind === "baseline" && baseline?.unread) continue;
+    deferred.push([
+      "exception",
+      `A stale deferral for ${kind}: nothing to defer; remove it from stacks.json.`,
+    ]);
+  }
+  return { findings: deferred, suppressions };
 }
 
 const API = "https://api.github.com";
@@ -494,6 +557,7 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
         unread: `${adminSecret(repo.split("/")[0])} is not set, so the settings of ${repo} were not read.`,
       };
   return {
+    repo,
     self: repo === WARD,
     tree: paths,
     caller,
@@ -502,9 +566,9 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   };
 }
 
-// The canary runs endpoint answers 404 when canary.yml does not exist yet, and
-// 401 or 403 when the token cannot read it. Only the 404 means "no canary": a
-// token that cannot read must never look like a missing workflow.
+// The canary runs endpoint answers 404 when canary.yml is gone, and 401 or 403
+// when the token cannot read it. Only the 404 means "no canary": a token that
+// cannot read must never look like a missing workflow.
 export function canaryFindings(status, body, now) {
   if (status === 401 || status === 403) {
     return [["token", `Cannot read canary runs on ${WARD} (HTTP ${status}).`]];

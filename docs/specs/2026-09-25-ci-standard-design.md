@@ -34,11 +34,11 @@ malinfossum/ward (public)
 │   ├── dependabot-automerge.yml   reusable: patch/minor auto-merge
 │   ├── repo-hygiene.yml    reusable (moved from workbench)
 │   ├── repo-audit.yml      weekly sweep over every repo (moved from workbench)
-│   └── canary.yml          weekly and post-tag run of the published @v1, as a consumer (Plan 5)
+│   └── canary.yml          weekly and post-release run of the published @v1, as a consumer (Plan 5)
 ├── templates/              dependabot.yml per ecosystem mix, ward.yml caller, ruleset.json
 ├── packages/a11y/          @malinfossum/ward-a11y — Playwright helpers + live-region audit
 ├── tools/                  identity.mjs, drift.mjs, node-contract.mjs, dotnet-check.mjs, automerge.mjs,
-│                           repo-hygiene.mjs, repo-audit additions, apply.mjs
+│                           repo-hygiene.mjs, repo-audit additions, watchdog.mjs, apply.mjs
 ├── stacks.json             detection rules → module + required scripts
 └── docs/
 ```
@@ -76,6 +76,20 @@ code that moved in keeps the licence it left with. `stacks.json` carries each mo
 files and the caller input it maps to; the scripts a module requires live in that module's docs, not
 in `stacks.json`. Spindle's `commit-identity.yml` retires in Plan 5, when the Ward caller replaces
 it, not in this plan.
+
+**Deviations recorded 2026-10-02 (Plan 5):** the canary's broken half does not go through
+`ci.yml@v1`: a reusable-workflow job cannot be marked expected-to-fail, and a canary that is red
+by design every Monday would train me to ignore it, so the broken fixtures run through the
+published tag's scripts and fixture suite (`actions/checkout` at `ref: v1`, then the fixture
+tests), while the good fixtures go through `ci.yml@v1` exactly as a consumer. The gate's red
+path is pinned by a unit test on `ci.yml` and was proven end to end by the Plan 1 red-gate PR.
+The watchdogs are not symmetric: the audit fails when the canary is red or stale, the canary
+fails only when the audit is stale or has never run, because a red audit already fails and emails
+on its own and a conclusion check both ways deadlocks on the first run. A repo can keep a detected
+module off on purpose through a dated `exceptions` entry in `stacks.json`, reported weekly as a
+warning; course repos, the scaffold copies in workbench and the ember-black theme use it. The
+hygiene check keeps its own caller file: folding it into `ward.yml` would make a README nit block
+every merge. `a11y` stays `off` in every caller until Plan 4 ships `test:a11y`.
 
 ## The caller
 
@@ -213,7 +227,7 @@ Every repo runs Ward's code, so Ward is the most trusted repo I own and gets the
   merges that bump.
 - **Ward's own auto-merge job** calls `dependabot-automerge.yml` at a released SHA, never by `./` path:
   a `./` reference runs the PR head's version of the workflow, with write access, before I have
-  reviewed it. Ward gets the job with `v1.0.0` (Plan 5), and a test bans `./` references to
+  reviewed it. Ward gets the job at a released commit (`v1.1.0` today, Plan 5), and a test bans `./` references to
   `dependabot-automerge.yml`.
 - **Ward's own rulesets:** the branch ruleset from the baseline, plus a tag ruleset on `v*` that blocks
   creation, updates and deletion, with repository admin as the only bypass (moving `v1` is part of every
@@ -381,9 +395,8 @@ Can every part of the circle be tested? Yes, with one link that sits outside Git
   do both of its jobs once: merge a first-party patch bump, and refuse one it must refuse.
 - **Canary on the published tag.** Dogfooding tests Ward at the PR head, not the `@v1` other repos run.
   A canary workflow in Ward (Plan 5, after `v1.0.0`) calls `malinfossum/ward/.github/workflows/ci.yml@v1`
-  exactly as a consumer does, against a good and a broken fixture, weekly and after every tag.
-- **Mutual watchdogs.** `repo-audit` (Plan 2) and the canary (Plan 5) watch each other: once both exist,
-  each fails when the other's last run is red or older than 8 days.
+  exactly as a consumer does, against the good fixtures through `ci.yml@v1` and the broken ones through the tag's own fixture suite, weekly and after every release.
+- **Mutual watchdogs.** `repo-audit` fails when the canary's last run is red, older than 8 days or missing; the canary fails when the audit has not completed a run in 8 days or never ran.
 - **Their shared blind spot.** GitHub disables scheduled workflows after 60 days without repository
   activity, and then both watchdogs stop together, silently. The watchdog outside GitHub's schedule is
   my Monday `/morning` briefing: it runs `gh run list` for the canary and the audit and flags either

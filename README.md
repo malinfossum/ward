@@ -38,6 +38,8 @@ reusable workflow that checks a repo's public face against its README ([docs](do
 [`repo-audit.yml`](.github/workflows/repo-audit.yml) sweeps every repo I own each Monday: baseline
 settings, caller on `@v1`, caller inputs against the repo's stacks, dated NuGet audit suppressions,
 runtimes near end of life, and the canary ([docs](docs/repo-audit.md)).
+[`canary.yml`](.github/workflows/canary.yml) runs the published `@v1` every Monday and after every release,
+as a consumer would, and watches that the audit keeps running.
 
 ## Develop
 
@@ -52,9 +54,9 @@ npm run lint
 
 | Path | What |
 |---|---|
-| `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml`, Ward's own `ward.yml` |
-| `stacks.json` | Which files mean which module, read by the audit and by the `ward` skill |
+| `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` |
+| `stacks.json` | Which files mean which module, and the dated `exceptions` for modules a repo keeps off on purpose; read by the audit and by the `ward` skill |
 | `docs/` | The spec, the plans, `repo-hygiene.md` and `repo-audit.md` |
-| `tools/` | The scripts each job runs, with their unit tests |
+| `tools/` | The scripts each job runs, `watchdog.mjs`, and their unit tests |
 | `templates/` | What a repo copies: caller, Dependabot config, rulesets, `Directory.Build.props` |
 | `fixtures/`, `tests/` | Known-good and known-broken projects (the C# ones are xUnit) and the tests that run them |

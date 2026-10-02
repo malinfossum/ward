@@ -1,7 +1,8 @@
 # Ward checks itself with its own entry point, on Linux and on Windows, plus the
-# fixture suite. Ward's own auto-merge job arrives with v1.0.0 (Plan 5): it must
-# call a released SHA, never ./, or a pull request could change the code that
-# runs with write access before I review it.
+# fixture suite. The auto-merge job calls a released commit, never ./: a pull
+# request could otherwise change the code that runs with write access before
+# I review it. Dependabot proposes the bump to each new release, and the job
+# refuses to merge that bump itself.
 name: Ward
 
 on:
@@ -53,3 +54,10 @@ jobs:
     uses: ./.github/workflows/repo-hygiene.yml
     with:
       mode: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 'warn' || 'strict' }}
+
+  automerge:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@fb2ea870674fa102cf0e0a8b8d8d97a7ba26a521 # v1.1.0
