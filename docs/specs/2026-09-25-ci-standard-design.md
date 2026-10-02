@@ -34,7 +34,7 @@ malinfossum/ward (public)
 │   ├── dependabot-automerge.yml   reusable: patch/minor auto-merge
 │   ├── repo-hygiene.yml    reusable (moved from workbench)
 │   ├── repo-audit.yml      weekly sweep over every repo (moved from workbench)
-│   └── canary.yml          weekly and post-tag run of the published @v1, as a consumer (Plan 5)
+│   └── canary.yml          weekly and post-release run of the published @v1, as a consumer (Plan 5)
 ├── templates/              dependabot.yml per ecosystem mix, ward.yml caller, ruleset.json
 ├── packages/a11y/          @malinfossum/ward-a11y — Playwright helpers + live-region audit
 ├── tools/                  identity.mjs, drift.mjs, node-contract.mjs, dotnet-check.mjs, automerge.mjs,

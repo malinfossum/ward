@@ -4,7 +4,7 @@
 
 **Goal:** Close the testing circle around the published `@v1` (a canary that runs it as a consumer, and watchdogs in both directions), give Ward its own auto-merge job on a released SHA, prove auto-merge once each way on Ward, and then put the caller, the Dependabot config, the settings and the ruleset on every public repo I own and on the six scaffolds, so that the weekly audit can run strict with no `--warn-kinds` and report zero repos missing the baseline.
 
-**Architecture:** Ward-side first, as one PR: `canary.yml` (weekly and on every `v*` tag push) calls `malinfossum/ward/.github/workflows/ci.yml@v1` against the good fixtures, runs the published tag's own fixture suite for the broken ones, and runs a new `tools/watchdog.mjs` against the audit; the audit's canary check loses its "not yet" warning; `stacks.json` gains a dated exception list for repos where a detected module stays off on purpose; `ward.yml` gains the `automerge` job at the `v1.1.0` commit. Then `v1.2.0`, the two observed auto-merge outcomes on Ward, and the rollout in two waves of PRs (identity-only callers, then module callers), followed by Malin's settings and ruleset pass per repo, a cleanup wave that retires the old CI, the scaffolds, and finally the flag removal. Settings, rulesets and "Allow auto-merge" are changed only by Malin, with the exact commands given here; Plan 3 turns those commands into `apply.mjs`.
+**Architecture:** Ward-side first, as one PR: `canary.yml` (weekly and after every release) calls `malinfossum/ward/.github/workflows/ci.yml@v1` against the good fixtures, runs the published tag's own fixture suite for the broken ones, and runs a new `tools/watchdog.mjs` against the audit; the audit's canary check loses its "not yet" warning; `stacks.json` gains a dated exception list for repos where a detected module stays off on purpose; `ward.yml` gains the `automerge` job at the `v1.1.0` commit. Then `v1.2.0`, the two observed auto-merge outcomes on Ward, and the rollout in two waves of PRs (identity-only callers, then module callers), followed by Malin's settings and ruleset pass per repo, a cleanup wave that retires the old CI, the scaffolds, and finally the flag removal. Settings, rulesets and "Allow auto-merge" are changed only by Malin, with the exact commands given here; Plan 3 turns those commands into `apply.mjs`.
 
 **Tech Stack:** GitHub Actions (reusable and scheduled workflows), Node 24 ESM scripts with no dependencies, `node:test`, Biome 2.5.14, GitHub REST API via `fetch` and `gh`.
 
@@ -98,7 +98,7 @@ EF inputs: none of the C# repos lists a separate data project in the inventory e
 | `tools/watchdog.mjs` + `.test.mjs` | `watch(workflow, token, now)`: the latest completed run of one of Ward's workflows is fresh; CLI fails the job otherwise |
 | `tools/repo-audit.mjs` + `.test.mjs` | `lastRunProblem` (shared by audit and watchdog), `checkCanary` without the "not yet" warning, `exceptionsFor` + `checkInputs` with exceptions, `exception` warning kind |
 | `stacks.json` + `tools/stacks.test.mjs` | `exceptions` map, dated reasons |
-| `.github/workflows/canary.yml` | Weekly and post-tag run of the published `@v1` plus the audit watchdog |
+| `.github/workflows/canary.yml` | Weekly and post-release run of the published `@v1` plus the audit watchdog |
 | `.github/workflows/ward.yml` | Ward's own `automerge` job at the `v1.1.0` commit |
 | `templates/ward.yml` | Auto-merge pin moves to `v1.1.0`, then to `v1.2.0` in Task 12 |
 | `tools/workflows.test.mjs`, `tools/templates.test.mjs` | Canary shape, gate red path, Ward's auto-merge job |
@@ -550,7 +550,7 @@ Expected: unit tests Task 1's total + 3; lint clean. The existing guards pass on
 
 - [ ] **Step 6: README**
 
-In `README.md`, extend the paragraph that starts "Two more checks live outside `ci.yml`" with one sentence at the end: `[`canary.yml`](.github/workflows/canary.yml) runs the published `@v1` every Monday and after every tag, as a consumer would, and watches that the audit keeps running.` In the Layout table, change the `.github/workflows/` row to: `` `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` `` and the `tools/` row to `` The scripts each job runs, `watchdog.mjs`, and their unit tests ``.
+In `README.md`, extend the paragraph that starts "Two more checks live outside `ci.yml`" with one sentence at the end: `[`canary.yml`](.github/workflows/canary.yml) runs the published `@v1` every Monday and after every release, as a consumer would, and watches that the audit keeps running.` In the Layout table, change the `.github/workflows/` row to: `` `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` `` and the `tools/` row to `` The scripts each job runs, `watchdog.mjs`, and their unit tests ``.
 
 - [ ] **Step 7: Commit**
 
@@ -908,7 +908,7 @@ hygiene check keeps its own caller file: folding it into `ward.yml` would make a
 every merge. `a11y` stays `off` in every caller until Plan 4 ships `test:a11y`.
 ```
 
-In "Testing Ward itself", amend the canary bullet to end with `..., against the good fixtures through `ci.yml@v1` and the broken ones through the tag's own fixture suite, weekly and after every tag.` and the mutual-watchdogs bullet to: `**Mutual watchdogs.** `repo-audit` fails when the canary's last run is red, older than 8 days or missing; the canary fails when the audit has not completed a run in 8 days or never ran.`
+In "Testing Ward itself", amend the canary bullet to end with `..., against the good fixtures through `ci.yml@v1` and the broken ones through the tag's own fixture suite, weekly and after every release.` and the mutual-watchdogs bullet to: `**Mutual watchdogs.** `repo-audit` fails when the canary's last run is red, older than 8 days or missing; the canary fails when the audit has not completed a run in 8 days or never ran.`
 
 - [ ] **Step 3: `docs/repo-audit.md`**
 
@@ -926,7 +926,7 @@ git push -u origin feat/rollout
 gh pr create --base main --head feat/rollout --title "Canary on the published v1, watchdogs, exceptions, and Ward's own auto-merge" --body "$(cat <<'EOF'
 Plan 5, Ward side.
 
-- `canary.yml` runs `ci.yml@v1` against the good fixtures every Monday and after every `v*` tag push, as a consumer would, and the v1 tag's own fixture suite for the broken ones. A reusable-workflow job cannot be expected to fail, and a weekly red run would train me to ignore it.
+- `canary.yml` runs `ci.yml@v1` against the good fixtures every Monday and after every release, as a consumer would, and the v1 tag's own fixture suite for the broken ones. A reusable-workflow job cannot be expected to fail, and a weekly red run would train me to ignore it.
 - `tools/watchdog.mjs` fails when the weekly audit has not completed a run in 8 days; the audit already fails on a red, stale or now missing canary (`canary-missing` is gone: a 404 is a deleted canary).
 - `stacks.json` carries dated exceptions for modules a repo keeps off on purpose; the audit reports them weekly as warnings and flags stale ones.
 - `ward.yml` gets the `automerge` job at the `v1.1.0` commit; `templates/ward.yml` pins the same.
@@ -976,7 +976,7 @@ git tag -fa v1 -m "Ward v1: currently v1.2.0" v1.2.0^{commit}
 git push origin v1.2.0
 git push --force origin v1
 git rev-parse v1.2.0^{commit}
-gh release create v1.2.0 --verify-tag --title "v1.2.0" --latest --notes "The canary runs the published v1 every Monday and after every tag; the audit and the canary watch each other; stacks.json carries dated exceptions; Ward's own ward.yml runs the auto-merge job. No change to ci.yml's inputs or checks."
+gh release create v1.2.0 --verify-tag --title "v1.2.0" --latest --notes "The canary runs the published v1 every Monday and after every release; the audit and the canary watch each other; stacks.json carries dated exceptions; Ward's own ward.yml runs the auto-merge job. No change to ci.yml's inputs or checks."
 gh api repos/malinfossum/ward/git/ref/tags/v1 --jq '.object.sha' | xargs -I{} gh api repos/malinfossum/ward/git/tags/{} --jq '.object.sha'
 ```
 Expected: the last command prints the same commit SHA as `git rev-parse v1.2.0^{commit}`. Publishing the release starts one canary run, after `v1` has moved, so it tests the new release:
