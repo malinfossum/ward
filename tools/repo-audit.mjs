@@ -20,9 +20,9 @@ const AUTOMERGE_PINNED =
   /^malinfossum\/ward\/\.github\/workflows\/dependabot-automerge\.yml@[0-9a-f]{40}$/;
 
 // Findings of these kinds are reported but never fail the run. canary-missing
-// leaves this set in Plan 5, once canary.yml exists: from then on a missing
-// canary is a failure, not "not yet".
-export const WARN_KINDS = new Set(["uncovered", "canary-missing", "token"]);
+// left this set with Plan 5: a 404 for canary.yml is a deleted or renamed
+// canary now, and fails like a red one.
+export const WARN_KINDS = new Set(["uncovered", "token"]);
 
 const indentOf = (line) => line.match(/^\s*/)[0].length;
 const unquote = (value) =>
@@ -351,26 +351,33 @@ export function checkRuntimes({ frameworks, nodeVersion, today }) {
   return findings;
 }
 
-// runs: null when Ward has no canary.yml yet (the API answers 404), else the
-// workflow-runs response for the latest completed run. The canary arrives in
-// Plan 5; until then a missing workflow is a warning, not a failure.
-export function checkCanary(runs, now) {
-  if (runs === null) return [["canary-missing", `No ${CANARY} in ${WARD} yet (Plan 5).`]];
-  const run = runs.workflow_runs?.[0];
-  if (!run) return [["canary", `${CANARY} has never completed a run.`]];
-  if (run.conclusion !== "success") {
-    return [["canary", `The latest canary run ended ${run.conclusion}: ${run.html_url}`]];
+// What is wrong with the latest completed run of one of Ward's own workflows:
+// never ran, ended red, or older than MAX_AGE_DAYS, which is what a schedule
+// GitHub turned off looks like. runs is the workflow-runs response for
+// per_page=1&status=completed. requireSuccess false checks liveness only: the
+// canary asks this about the audit, and a red audit has already failed and
+// emailed on its own, so reporting it twice would only add a red canary. A
+// date that does not parse reads as stale, never as fresh.
+export function lastRunProblem(workflow, runs, now, { requireSuccess = true } = {}) {
+  const run = runs?.workflow_runs?.[0];
+  if (!run) return `${workflow} has never completed a run.`;
+  if (requireSuccess && run.conclusion !== "success") {
+    return `The latest ${workflow} run ended ${run.conclusion}: ${run.html_url}`;
   }
   const days = Math.floor((Date.parse(now) - Date.parse(run.updated_at)) / DAY);
-  if (days > MAX_AGE_DAYS) {
-    return [
-      [
-        "canary",
-        `The latest canary run is ${days} days old (${run.updated_at}); GitHub may have disabled the schedule.`,
-      ],
-    ];
+  if (!(days <= MAX_AGE_DAYS)) {
+    return `The latest ${workflow} run is ${days} days old (${run.updated_at}); GitHub may have disabled the schedule.`;
   }
-  return [];
+  return null;
+}
+
+// runs: null when the API answers 404 for canary.yml, else the workflow-runs
+// response for the latest completed run. A missing canary fails like a red
+// one: it exists since Plan 5, so a 404 means it was deleted or renamed.
+export function checkCanary(runs, now) {
+  if (runs === null) return [["canary", `No ${CANARY} in ${WARD}.`]];
+  const problem = lastRunProblem(CANARY, runs, now);
+  return problem ? [["canary", problem]] : [];
 }
 
 // One repo, all checks. tree: blob paths on the default branch; caller: the
@@ -502,9 +509,9 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   };
 }
 
-// The canary runs endpoint answers 404 when canary.yml does not exist yet, and
-// 401 or 403 when the token cannot read it. Only the 404 means "no canary": a
-// token that cannot read must never look like a missing workflow.
+// The canary runs endpoint answers 404 when canary.yml is gone, and 401 or 403
+// when the token cannot read it. Only the 404 means "no canary": a token that
+// cannot read must never look like a missing workflow.
 export function canaryFindings(status, body, now) {
   if (status === 401 || status === 403) {
     return [["token", `Cannot read canary runs on ${WARD} (HTTP ${status}).`]];

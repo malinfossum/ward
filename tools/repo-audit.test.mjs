@@ -15,6 +15,7 @@ import {
   fetchRepoData,
   findSuppressions,
   hardCount,
+  lastRunProblem,
   parseCaller,
   redactEmails,
   report,
@@ -437,7 +438,7 @@ test("a healthy canary run passes", () => {
   assert.deepEqual(checkCanary(runs, "2026-09-30T08:00:00Z"), []);
 });
 
-test("a red, stale or never-run canary is a finding; a missing canary is only a warning", () => {
+test("a red, stale, never-run or missing canary is a hard finding", () => {
   const red = {
     workflow_runs: [{ conclusion: "failure", updated_at: "2026-09-29T06:00:00Z", html_url: "u" }],
   };
@@ -450,12 +451,40 @@ test("a red, stale or never-run canary is a finding; a missing canary is only a 
     checkCanary({ total_count: 0, workflow_runs: [] }, "2026-09-30T08:00:00Z")[0][1],
     /never completed/,
   );
+  // Since Plan 5 the canary exists: a 404 is a deleted or renamed canary.
   const missing = checkCanary(null, "2026-09-30T08:00:00Z");
-  assert.deepEqual(kinds(missing), ["canary-missing"]);
-  assert.ok(WARN_KINDS.has("canary-missing"));
-  for (const findings of [checkCanary(red, "x"), checkCanary(stale, "2026-09-30T08:00:00Z")]) {
+  assert.deepEqual(kinds(missing), ["canary"]);
+  assert.match(missing[0][1], /No canary\.yml in malinfossum\/ward/);
+  assert.ok(!WARN_KINDS.has("canary-missing"));
+  for (const findings of [
+    missing,
+    checkCanary(red, "x"),
+    checkCanary(stale, "2026-09-30T08:00:00Z"),
+  ]) {
     assert.ok(!WARN_KINDS.has(findings[0][0]));
   }
+});
+
+test("lastRunProblem: liveness only when requireSuccess is off; a bad date is never fresh", () => {
+  const fresh = { conclusion: "failure", updated_at: "2026-09-29T06:00:00Z", html_url: "u" };
+  const runs = { workflow_runs: [fresh] };
+  assert.match(lastRunProblem("repo-audit.yml", runs, "2026-09-30T08:00:00Z"), /ended failure/);
+  assert.equal(
+    lastRunProblem("repo-audit.yml", runs, "2026-09-30T08:00:00Z", { requireSuccess: false }),
+    null,
+  );
+  const old = {
+    workflow_runs: [{ ...fresh, conclusion: "success", updated_at: "2026-09-21T06:00:00Z" }],
+  };
+  assert.match(
+    lastRunProblem("repo-audit.yml", old, "2026-09-30T08:00:00Z", { requireSuccess: false }),
+    /repo-audit\.yml run is 9 days old/,
+  );
+  assert.match(lastRunProblem("x.yml", null, "2026-09-30T08:00:00Z"), /never completed/);
+  assert.match(
+    lastRunProblem("x.yml", { workflow_runs: [{ ...fresh, conclusion: "success" }] }, "x"),
+    /days old/,
+  );
 });
 
 test("auditRepo runs every check over one repo's data", () => {
@@ -512,7 +541,7 @@ test("a kind named in --warn-kinds is a warning; the same kind without the flag 
 const NOW = "2026-09-30T06:00:00Z";
 
 test("canaryFindings: only a 404 means no canary; 401 and 403 are a token finding", () => {
-  assert.deepEqual(kinds(canaryFindings(404, null, NOW)), ["canary-missing"]);
+  assert.deepEqual(kinds(canaryFindings(404, null, NOW)), ["canary"]);
   for (const status of [401, 403]) {
     const findings = canaryFindings(status, null, NOW);
     assert.deepEqual(kinds(findings), ["token"]);
@@ -527,7 +556,7 @@ test("a canary that cannot be read fails the run on my own repo", () => {
   const own = warnKindsFor(WARD.split("/")[0], {});
   assert.equal(hardCount(canaryFindings(403, null, NOW), own), 1);
   assert.equal(hardCount(canaryFindings(401, null, NOW), own), 1);
-  assert.equal(hardCount(canaryFindings(404, null, NOW), own), 0);
+  assert.equal(hardCount(canaryFindings(404, null, NOW), own), 1);
 });
 
 test("the suppression table redacts email addresses from the public reason", () => {
@@ -818,7 +847,15 @@ test("an error on an archived repo is a warning in the archived section, never a
   const stub = stubFetch([
     [/\/users\/rookdex\/repos/, 200, [listed]],
     [/^\/repos\/rookdex\/old$/, 500],
-    [/\/canary\.yml\/runs/, 404],
+    [
+      /\/canary\.yml\/runs/,
+      200,
+      {
+        workflow_runs: [
+          { conclusion: "success", updated_at: new Date().toISOString(), html_url: "u" },
+        ],
+      },
+    ],
   ]);
   try {
     const { lines, result } = await quietly(() =>
@@ -858,7 +895,15 @@ test("an org without its own token: one token finding naming the secret, and the
     [/\/git\/trees\/main/, 200, { truncated: false, tree: [] }],
     [/\/contents\//, 404],
     [/\/rules\/branches\/main$/, 200, baseline.rules],
-    [/\/canary\.yml\/runs/, 404],
+    [
+      /\/canary\.yml\/runs/,
+      200,
+      {
+        workflow_runs: [
+          { conclusion: "success", updated_at: new Date().toISOString(), html_url: "u" },
+        ],
+      },
+    ],
   ]);
   try {
     const env = { GITHUB_TOKEN: "read", WARD_AUDIT_TOKEN: "mine" };

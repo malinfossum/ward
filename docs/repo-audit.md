@@ -21,11 +21,10 @@ run emails me.
 | `error` | The audit could not read the repo (a GitHub API error); the other repos still report |
 
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see
-`stacks.json`), `canary-missing` (no `canary.yml` until Plan 5), `token` (the token cannot read a
-repo's settings; on my own repos, and on an org with its own token, this fails the run instead), and
-whatever `--warn-kinds` names for a run: the workflow passes `--warn-kinds caller,baseline,ruleset`
-until Plan 5 rolls the caller and the settings out, so a red run means new drift of another kind,
-not the rollout.
+`stacks.json`), `token` (the token cannot read a repo's settings; on my own repos, and on an org
+with its own token, this fails the run instead), and whatever `--warn-kinds` names for a run: the
+workflow passes `--warn-kinds caller,baseline,ruleset` until Plan 5 rolls the caller and the
+settings out, so a red run means new drift of another kind, not the rollout.
 Private repos never enter the sweep: it lists public repos only, since they keep Actions off and sit
 outside the standard.
 Archived repos are listed in a collapsed section and never fail the run. Every suppression found is
@@ -73,7 +72,15 @@ Setting it up:
 
 ## The watchdogs
 
-The audit fails when the canary's last run is red or stale, and the canary (Plan 5) does the same
-for the audit. GitHub turns scheduled workflows off after 60 days without activity, which would
-stop both at once, so my Monday `/morning` briefing runs `gh run list` for both and flags either
-one that is red or older than 8 days.
+The audit fails when the canary's last completed run is red, older than 8 days, or missing
+altogether (a 404 for `canary.yml` is a deleted or renamed canary, not "not yet"). The canary runs
+`tools/watchdog.mjs repo-audit.yml`, which fails when the audit has not completed a run in 8 days
+or has never run; it does not look at the audit's conclusion, because a red audit already fails
+and emails me on its own, and because a conclusion check in both directions would deadlock on the
+first run. GitHub turns scheduled workflows off after 60 days without activity, which would stop
+both at once, so my Monday `/morning` briefing runs `gh run list` for both and flags either one
+that is red or older than 8 days.
+
+```bash
+GITHUB_TOKEN=$(gh auth token) node tools/watchdog.mjs repo-audit.yml
+```
