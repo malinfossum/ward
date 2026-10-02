@@ -55,7 +55,7 @@ npm run lint
 | Path | What |
 |---|---|
 | `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` |
-| `stacks.json` | Which files mean which module, read by the audit and by the `ward` skill |
+| `stacks.json` | Which files mean which module, and the dated `exceptions` for modules a repo keeps off on purpose; read by the audit and by the `ward` skill |
 | `docs/` | The spec, the plans, `repo-hygiene.md` and `repo-audit.md` |
 | `tools/` | The scripts each job runs, `watchdog.mjs`, and their unit tests |
 | `templates/` | What a repo copies: caller, Dependabot config, rulesets, `Directory.Build.props` |
