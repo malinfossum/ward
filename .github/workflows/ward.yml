@@ -60,4 +60,4 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@fb2ea870674fa102cf0e0a8b8d8d97a7ba26a521 # v1.1.0
+    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@0f9842e422ecbaf885e42ff619888fd7cdc306bf # v1.2.0
