@@ -1341,7 +1341,7 @@ Update `~/.claude/memory/domain/ward.md`'s Resume with the observed auto-merge a
 
 ## Follow-ups (dated)
 
-- Observed on Ward: auto-merge <url> (date), refusal <url> (date). Filled in by Task 7.
+- Observed on Ward: auto-merge https://github.com/malinfossum/ward/actions/runs/37356026103 (2026-10-05, PR #10, Biome 2.5.14 to 2.5.15, squashed by Dependabot), refusal https://github.com/malinfossum/ward/actions/runs/37356043104 (2026-10-05, PR #11, Ward self-bump 1.1.0 to 1.2.0, left for review). Recorded 2026-10-07.
 - `templates/ward.yml` pins `v1.2.0` from Task 12 on. Release routine from now on: tag, move `v1`, publish the release (which runs the canary), then one PR that moves the pin in `templates/ward.yml` and in the six workbench scaffold callers, because Dependabot scans only `.github/workflows/` at a repo's root and never moves those. Dependabot proposes the `ward.yml` bump per consumer repo, and the automerge job refuses each so I read it.
 - Bypass actors are not audited (deferred from Plan 2, and D9 adds one on purpose on the profile repo). When the audit learns to read `/repos/{r}/rulesets/{id}`, the profile repo's admin bypass becomes a dated exception like the others.
 - Plan 3: `apply.mjs` replaces Task 10's `gh api` loop (settings, ruleset, auto-merge in that order) and the caller generator from Task 8; the loadout pre-push hook lands there too.
