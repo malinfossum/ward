@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { hasTestProject, planDotnet, resolveTarget, toolManifestNear } from "./dotnet-check.mjs";
+import {
+  fromRoot,
+  hasTestProject,
+  planDotnet,
+  resolveTarget,
+  toolManifestNear,
+} from "./dotnet-check.mjs";
 
 test("the default plan restores, builds, formats and tests", () => {
   assert.deepEqual(
@@ -115,4 +121,17 @@ test("the manifest lookup never climbs above the checkout root", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("an EF path is resolved from the checkout root, not the module directory", () => {
+  assert.equal(fromRoot("/repo", "api/Varde.Data"), resolve("/repo", "api/Varde.Data"));
+  assert.equal(fromRoot("/repo", ""), "");
+  const absolute = resolve("/elsewhere/App.Data");
+  assert.equal(fromRoot("/repo", absolute), absolute);
+});
+
+test("a resolved EF path with shell characters is still one argument", () => {
+  const hostile = fromRoot("/repo", 'src/App"; rm -rf ~; "');
+  const steps = planDotnet({ efProject: hostile });
+  assert.equal(steps[4].args.filter((arg) => arg === hostile).length, 2);
 });

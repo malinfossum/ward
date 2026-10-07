@@ -67,6 +67,13 @@ export function toolManifestNear(cwd, root) {
   }
 }
 
+// The caller gives EF paths from the repository root, like every other input,
+// but the commands run in the module directory. Absolute paths survive the
+// change of directory; an empty one stays empty so the startup default holds.
+export function fromRoot(root, path) {
+  return path ? resolve(root, path) : "";
+}
+
 function csprojTexts(dir) {
   return readdirSync(dir, { recursive: true })
     .filter((file) => file.endsWith(".csproj") && !/(^|[\\/])(bin|obj)[\\/]/.test(file))
@@ -78,8 +85,8 @@ function main() {
   const { cwd, project } = resolveTarget(path, statSync(path).isFile());
   const steps = planDotnet({
     project,
-    efProject: process.env.EF_PROJECT ?? "",
-    efStartupProject: process.env.EF_STARTUP_PROJECT ?? "",
+    efProject: fromRoot(process.cwd(), process.env.EF_PROJECT ?? ""),
+    efStartupProject: fromRoot(process.cwd(), process.env.EF_STARTUP_PROJECT ?? ""),
     toolRestore: toolManifestNear(cwd, process.cwd()) !== "",
   });
   for (const step of steps) {
