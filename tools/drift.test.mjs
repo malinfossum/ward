@@ -9,10 +9,11 @@ test("files that decide what Ward checks are found at any depth", () => {
     "biome.json",
     "web/biome.jsonc",
     "global.json",
+    "api/.config/dotnet-tools.json",
     "src/app.js",
     "README.md",
   ];
-  assert.deepEqual(guardedChanges(files), files.slice(0, 5));
+  assert.deepEqual(guardedChanges(files), files.slice(0, 6));
 });
 
 test("a changed npm script counts as a change to the checks", () => {

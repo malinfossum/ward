@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { hasTestProject, planDotnet, resolveTarget } from "./dotnet-check.mjs";
+import { hasTestProject, planDotnet, resolveTarget, toolManifestNear } from "./dotnet-check.mjs";
 
 test("the default plan restores, builds, formats and tests", () => {
   assert.deepEqual(
@@ -58,4 +61,58 @@ test("a test project is recognised by its test SDK", () => {
   assert.equal(hasTestProject(['<PackageReference Include="Microsoft.NET.Test.Sdk" />']), true);
   assert.equal(hasTestProject(['<Project Sdk="MSTest.Sdk/3.9.0">']), true);
   assert.equal(hasTestProject(['<Project Sdk="Microsoft.NET.Sdk">']), false);
+});
+
+test("a tool manifest adds a tool restore step before restore", () => {
+  const steps = planDotnet({ toolRestore: true });
+  assert.deepEqual(steps[0], { name: "tool restore", args: ["tool", "restore"] });
+  assert.equal(steps[1].name, "restore");
+  assert.equal(
+    planDotnet().some((s) => s.name === "tool restore"),
+    false,
+  );
+});
+
+// A throwaway checkout: root/api is the module directory.
+function checkout() {
+  const root = mkdtempSync(join(tmpdir(), "ward-dotnet-"));
+  mkdirSync(join(root, "api", "src"), { recursive: true });
+  return root;
+}
+
+function manifestAt(dir) {
+  mkdirSync(join(dir, ".config"), { recursive: true });
+  writeFileSync(join(dir, ".config", "dotnet-tools.json"), "{}");
+}
+
+test("a tool manifest is found in the module directory or any parent up to the root", () => {
+  const root = checkout();
+  try {
+    assert.equal(toolManifestNear(join(root, "api"), root), "");
+    manifestAt(root);
+    assert.equal(
+      toolManifestNear(join(root, "api", "src"), root),
+      join(root, ".config", "dotnet-tools.json"),
+    );
+    manifestAt(join(root, "api"));
+    assert.equal(
+      toolManifestNear(join(root, "api"), root),
+      join(root, "api", ".config", "dotnet-tools.json"),
+    );
+    // varde's shape: the input is a solution file next to the manifest.
+    const { cwd } = resolveTarget(join(root, "api", "Varde.slnx"), true);
+    assert.equal(toolManifestNear(cwd, root), join(root, "api", ".config", "dotnet-tools.json"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the manifest lookup never climbs above the checkout root", () => {
+  const root = checkout();
+  try {
+    manifestAt(root);
+    assert.equal(toolManifestNear(join(root, "api"), join(root, "api")), "");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

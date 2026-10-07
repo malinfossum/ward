@@ -2,8 +2,8 @@
 // optionally check for EF Core model changes without a migration. Every command
 // runs as an argument array, never through a shell.
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // A directory runs in place. A solution or project file runs in its folder and
@@ -12,9 +12,15 @@ export function resolveTarget(path, isFile) {
   return isFile ? { cwd: dirname(path), project: basename(path) } : { cwd: path, project: "" };
 }
 
-export function planDotnet({ project = "", efProject = "", efStartupProject = "" } = {}) {
+export function planDotnet({
+  project = "",
+  efProject = "",
+  efStartupProject = "",
+  toolRestore = false,
+} = {}) {
   const target = project ? [project] : [];
   const steps = [
+    ...(toolRestore ? [{ name: "tool restore", args: ["tool", "restore"] }] : []),
     { name: "restore", args: ["restore", ...target] },
     { name: "build", args: ["build", ...target, "--no-restore", "-warnaserror"] },
     { name: "format", args: ["format", ...target, "--verify-no-changes", "--no-restore"] },
@@ -45,6 +51,22 @@ export function hasTestProject(csprojTexts) {
   );
 }
 
+// `dotnet` looks for .config/dotnet-tools.json from the working directory
+// upwards. A repo that pins dotnet-ef there must get that version, not the
+// one Ward installs globally, so the same walk decides whether to restore.
+// It stops at the checkout root: nothing on the runner outside the repo may
+// change what a repo's check does.
+export function toolManifestNear(cwd, root) {
+  let dir = resolve(cwd);
+  const top = resolve(root);
+  for (;;) {
+    const manifest = join(dir, ".config", "dotnet-tools.json");
+    if (existsSync(manifest)) return manifest;
+    if (dir === top || dirname(dir) === dir) return "";
+    dir = dirname(dir);
+  }
+}
+
 function csprojTexts(dir) {
   return readdirSync(dir, { recursive: true })
     .filter((file) => file.endsWith(".csproj") && !/(^|[\\/])(bin|obj)[\\/]/.test(file))
@@ -58,6 +80,7 @@ function main() {
     project,
     efProject: process.env.EF_PROJECT ?? "",
     efStartupProject: process.env.EF_STARTUP_PROJECT ?? "",
+    toolRestore: toolManifestNear(cwd, process.cwd()) !== "",
   });
   for (const step of steps) {
     if (step.name === "test" && !hasTestProject(csprojTexts(cwd))) {
