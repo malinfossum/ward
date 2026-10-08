@@ -390,8 +390,8 @@ export function planFiles(
 // Writes the create and edit actions under dir; returns the paths written. A
 // create uses the wx flag, so a file that exists is never overwritten even if
 // it appeared after the plan was made. An edit changes package.json scripts.
-export function writeFiles(dir, plan) {
-  const written = [];
+// written fills as it goes, so a caller still has the paths done before a throw.
+export function writeFiles(dir, plan, written = []) {
   for (const file of plan.files) {
     if (file.action !== "create" && file.action !== "edit") continue;
     const target = join(dir, file.path);
@@ -442,7 +442,15 @@ function filesCommand(argv, { stacks, templates }) {
   for (const note of plan.notes) lines.push(say("note", note));
   if (plan.stops.length) return { lines, exitCode: 1 };
   if (argv.includes("--apply")) {
-    for (const path of writeFiles(dir, plan)) lines.push(say("wrote", path));
+    const written = [];
+    try {
+      writeFiles(dir, plan, written);
+    } catch (error) {
+      for (const path of written) lines.push(say("wrote", path));
+      lines.push(say("error", `Stopped writing: ${error.message}`));
+      return { lines, exitCode: 1 };
+    }
+    for (const path of written) lines.push(say("wrote", path));
   }
   return { lines, exitCode: 0 };
 }

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import {
   CALLER,
   DEPENDABOT,
@@ -236,8 +236,14 @@ const PKG = JSON.stringify(
 );
 const OFF = { node: "", dotnet: "", "dotnet-os": "ubuntu-latest", "dotnet-ef-project": "" };
 
+const made = [];
+after(() => {
+  for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
+
 function repo(files) {
   const dir = mkdtempSync(join(tmpdir(), "ward-apply-"));
+  made.push(dir);
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(join(dir, dirname(path)), { recursive: true });
     writeFileSync(join(dir, path), content);
@@ -509,4 +515,20 @@ test("in a git work tree the tree is what git would add: an ignored folder is in
   assert.doesNotThrow(() => planFiles(dir, { templates }));
   const plain = repo({ ".gitignore": "ignored/\n", "ignored/package.json": PKG });
   assert.equal(planFiles(plain, { templates }).inputs.node, "ignored");
+});
+
+test("a write that fails halfway is reported: the plan lines, what was written, the error, exit 1", async () => {
+  const dir = repo({ "package.json": PKG });
+  // A directory where the Dependabot file goes: the plan sees no file and says create.
+  mkdirSync(join(dir, DEPENDABOT), { recursive: true });
+  const out = await runApply(["files", "--dir", dir, "--apply"], {}, { templates });
+  assert.equal(out.exitCode, 1);
+  assert.ok(out.lines[0].startsWith('inputs  node="."'));
+  assert.ok(out.lines.includes(`create  ${CALLER}`));
+  assert.ok(out.lines.includes(`create  ${DEPENDABOT}`));
+  assert.ok(out.lines.includes(`wrote   ${CALLER}`));
+  assert.ok(!out.lines.includes(`wrote   ${DEPENDABOT}`));
+  const last = out.lines.at(-1);
+  assert.ok(last.startsWith("error   Stopped writing:"), last);
+  assert.ok(existsSync(join(dir, CALLER)));
 });
