@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -38,9 +38,10 @@ test("node is the one package.json's directory, the root as .", () => {
 test("the shallowest package.json wins; a tie is a stop, never a guess", () => {
   assert.equal(plan(["package.json", "e2e/package.json"]).inputs.node, ".");
   const tie = plan(["web/package.json", "api/package.json"]);
+  assert.equal(tie.stops[0].module, "node");
   assert.equal(tie.inputs.node, "");
   assert.match(
-    tie.stops[0],
+    tie.stops[0].text,
     /More than one package\.json at the same depth \(web\/package\.json, api\/package\.json\)/,
   );
 });
@@ -51,8 +52,9 @@ test("dotnet is the solution file, or the only project when there is none", () =
   assert.equal(plan(["Tool/Tool.csproj"]).inputs.dotnet, "Tool/Tool.csproj");
   const two = plan(["A/A.csproj", "B/B.csproj"]);
   assert.equal(two.inputs.dotnet, "");
-  assert.match(two.stops[0], /More than one project file with no solution above it/);
+  assert.match(two.stops[0].text, /More than one project file with no solution above it/);
   assert.equal(plan(["Legacy.sln", "App.slnx"]).stops.length, 1);
+  assert.equal(two.stops[0].module, "dotnet");
 });
 
 test("WPF means windows-latest", () => {
@@ -99,10 +101,13 @@ test("the Tools package alone, or a package that only looks like EF Core, is not
 test("two EF projects, or two Design projects, are a stop", () => {
   const paths = ["App.slnx", "src/A/A.csproj", "src/B/B.csproj"];
   const twoEf = plan(paths, { "src/A/A.csproj": SQLITE, "src/B/B.csproj": SQLITE });
-  assert.match(twoEf.stops[0], /More than one project referencing Microsoft\.EntityFrameworkCore/);
+  assert.match(
+    twoEf.stops[0].text,
+    /More than one project referencing Microsoft\.EntityFrameworkCore/,
+  );
   assert.equal(twoEf.inputs["dotnet-ef-project"], "");
   const twoDesign = plan(paths, { "src/A/A.csproj": DESIGN, "src/B/B.csproj": DESIGN });
-  assert.match(twoDesign.stops[0], /More than one project referencing/);
+  assert.match(twoDesign.stops[0].text, /More than one project referencing/);
 });
 
 test("files under node_modules, bin and obj never count", () => {
@@ -469,4 +474,39 @@ test("the files command resolves exceptions by repo name, from --repo or the ori
   assert.match(viaRemote.lines[0], /dotnet=""/);
   const noRemote = await runApply(["files", "--dir", repo(files)], {}, deps);
   assert.match(noRemote.lines[0], /dotnet="App\.slnx"/);
+});
+
+test("an excepted module's stops are dropped; the note still names it", () => {
+  const dir = repo({ "package.json": PKG, "A.slnx": "", "B.slnx": "", "src/A/A.csproj": "" });
+  const open = planFiles(dir, { templates });
+  assert.equal(open.stops.length, 1);
+  assert.equal(open.stops[0].module, "dotnet");
+  const reason = "One solution per week (2026-10-02).";
+  const plan = planFiles(dir, { templates, exceptions: { dotnet: reason } });
+  assert.deepEqual(plan.stops, []);
+  assert.equal(plan.inputs.dotnet, "");
+  assert.deepEqual(plan.notes, [`dotnet stays off: ${reason}`]);
+});
+
+test("in a git work tree the tree is what git would add: an ignored folder is invisible", () => {
+  const dir = repo({
+    ".gitignore": "ignored/\n",
+    "ignored/package.json": PKG,
+    "web/package.json": PKG,
+    "gone.txt": "",
+  });
+  assert.equal(spawnSync("git", ["-C", dir, "init", "-q"]).status, 0);
+  const plan = planFiles(dir, { templates });
+  assert.equal(plan.inputs.node, "web");
+  assert.deepEqual(plan.stops, []);
+  assert.deepEqual(
+    plan.ecosystems.map((e) => `${e.ecosystem} ${e.directory}`),
+    ["github-actions /", "npm /web"],
+  );
+  assert.doesNotMatch(file(plan, DEPENDABOT).content, /directory: \/ignored/);
+  spawnSync("git", ["-C", dir, "add", "gone.txt"]);
+  rmSync(join(dir, "gone.txt"));
+  assert.doesNotThrow(() => planFiles(dir, { templates }));
+  const plain = repo({ ".gitignore": "ignored/\n", "ignored/package.json": PKG });
+  assert.equal(planFiles(plain, { templates }).inputs.node, "ignored");
 });

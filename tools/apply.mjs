@@ -5,7 +5,14 @@
 // command prints what it would do and changes nothing until --apply. The
 // ward skill in loadout drives it; by hand: node tools/apply.mjs <command>.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { planSteps } from "./node-contract.mjs";
@@ -34,20 +41,20 @@ const EF_DESIGN = /Microsoft\.EntityFrameworkCore\.Design(?![\w.])/;
 
 // The shallowest of the candidates; a tie is a stop, because the choice is
 // then mine, not the script's.
-function pickOne(paths, what, stops) {
+function pickOne(paths, what, module, stops) {
   if (paths.length === 0) return "";
   const top = Math.min(...paths.map(depth));
   const shallowest = paths.filter((path) => depth(path) === top);
   if (shallowest.length === 1) return shallowest[0];
-  stops.push(
-    `More than one ${what} at the same depth (${shallowest.join(", ")}); set that input yourself.`,
-  );
+  const text = `More than one ${what} at the same depth (${shallowest.join(", ")}); set that input yourself.`;
+  stops.push({ module, text });
   return "";
 }
 
 // The caller inputs and the Dependabot blocks a tree needs. paths are
 // repo-relative with forward slashes; csproj holds the text of every .csproj
 // in paths, by path. A planned stack is reported as uncovered, never guessed.
+// Each stop names the module (node or dotnet) whose choice it blocks.
 export function planInputs(paths, csproj, stacks) {
   const stops = [];
   const kept = paths.filter((path) => !ignored(path, stacks.ignore));
@@ -56,12 +63,12 @@ export function planInputs(paths, csproj, stacks) {
   const uncovered = detected.filter((stack) => stack.status !== "shipped").map((s) => s.name);
 
   const manifests = filesOf("node");
-  const manifest = pickOne(manifests, "package.json", stops);
+  const manifest = pickOne(manifests, "package.json", "node", stops);
   const solutions = filesOf("dotnet").filter((path) => /\.slnx?$/.test(path));
   const projects = filesOf("dotnet").filter((path) => path.endsWith(".csproj"));
   const dotnet = solutions.length
-    ? pickOne(solutions, "solution file", stops)
-    : pickOne(projects, "project file with no solution above it", stops);
+    ? pickOne(solutions, "solution file", "dotnet", stops)
+    : pickOne(projects, "project file with no solution above it", "dotnet", stops);
   const text = (path) => csproj[path] ?? "";
   const wpf = projects.some((path) => /<UseWPF>\s*true\s*<\/UseWPF>/i.test(text(path)));
 
@@ -70,10 +77,16 @@ export function planInputs(paths, csproj, stacks) {
   // only a Design reference has one project doing both jobs.
   const withEf = projects.filter((path) => EF_PACKAGE.test(text(path)));
   const withDesign = projects.filter((path) => EF_DESIGN.test(text(path)));
-  const efPick = pickOne(withEf, "project referencing Microsoft.EntityFrameworkCore", stops);
+  const efPick = pickOne(
+    withEf,
+    "project referencing Microsoft.EntityFrameworkCore",
+    "dotnet",
+    stops,
+  );
   const designPick = pickOne(
     withDesign,
     "project referencing Microsoft.EntityFrameworkCore.Design",
+    "dotnet",
     stops,
   );
   const ef = withEf.length ? efPick : designPick;
@@ -169,14 +182,32 @@ export function readTemplates(root = ROOT) {
   };
 }
 
+const git = (dir, args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+
+// Inside a git work tree, the files git knows or would add (tracked, plus
+// untracked that .gitignore does not hide), so an ignored .claude/worktrees
+// copy or build output never counts. A plain directory is walked instead.
+function gitFiles(dir) {
+  if (git(dir, ["rev-parse", "--is-inside-work-tree"]).status !== 0) return null;
+  const listed = git(dir, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
+  if (listed.status !== 0) return null;
+  return [...new Set(listed.stdout.split("\0").filter(Boolean))].filter((path) => {
+    try {
+      return lstatSync(join(dir, path)).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
 // Every file under dir as a repo-relative path with forward slashes, minus
 // the prefixes stack detection ignores (node_modules, bin, obj, .git).
 export function listTree(dir, stacks) {
-  return readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(dir, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
-    .filter((path) => !ignored(path, stacks.ignore))
-    .sort();
+  const walked = () =>
+    readdirSync(dir, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => relative(dir, join(entry.parentPath, entry.name)).replaceAll("\\", "/"));
+  return (gitFiles(dir) ?? walked()).filter((path) => !ignored(path, stacks.ignore)).sort();
 }
 
 const SCRIPT_FOR = {
@@ -279,11 +310,13 @@ function planDependabot(text, ecosystems, template) {
 // Turns off the shipped modules the repo keeps off on purpose (stacks.json
 // exceptions): the planned input is "" and a note gives the reason. The EF
 // inputs belong to dotnet and go with it.
-function applyExceptions(inputs, stacks, exceptions) {
+function applyExceptions(inputs, stacks, exceptions, stops) {
   const notes = [];
   for (const module of stacks.modules) {
     const reason = exceptions[module.name];
-    if (module.status !== "shipped" || !reason || !inputs[module.input]) continue;
+    if (module.status !== "shipped" || !reason) continue;
+    // A module whose choice was a stop has an empty input but is still detected.
+    if (!inputs[module.input] && !stops.some((stop) => stop.module === module.name)) continue;
     inputs[module.input] = "";
     if (module.name === "dotnet") {
       inputs["dotnet-ef-project"] = "";
@@ -307,9 +340,12 @@ export function planFiles(
   const csproj = Object.fromEntries(
     paths.filter((p) => p.endsWith(".csproj")).map((p) => [p, read(p)]),
   );
-  const { inputs, ecosystems, uncovered, stops } = planInputs(paths, csproj, stacks);
+  const planned = planInputs(paths, csproj, stacks);
+  const { inputs, ecosystems, uncovered } = planned;
   const files = [];
-  const notes = applyExceptions(inputs, stacks, exceptions);
+  const notes = applyExceptions(inputs, stacks, exceptions, planned.stops);
+  // A module kept off on purpose has nothing to decide, so its stops go too.
+  const stops = planned.stops.filter((stop) => !exceptions[stop.module]);
   files.push(planCaller(read(CALLER), inputs, templates.caller));
   files.push(planDependabot(read(DEPENDABOT), ecosystems, templates.dependabot));
   if (inputs.dotnet) {
@@ -328,7 +364,7 @@ export function planFiles(
     try {
       pkg = JSON.parse(text);
     } catch {
-      stops.push(`${manifest} is not valid JSON.`);
+      stops.push({ module: "node", text: `${manifest} is not valid JSON.` });
     }
     if (pkg) {
       const siblings = paths
@@ -399,7 +435,7 @@ function filesCommand(argv, { stacks, templates }) {
     const text = `${name} files found, but no Ward module covers them yet; draft the module as a PR to Ward.`;
     lines.push(say("warn", text));
   }
-  for (const stop of plan.stops) lines.push(say("stop", stop));
+  for (const stop of plan.stops) lines.push(say("stop", stop.text));
   for (const file of plan.files) {
     lines.push(say(file.action, file.detail ? `${file.path}: ${file.detail}` : file.path));
   }
