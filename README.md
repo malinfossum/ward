@@ -26,7 +26,7 @@ jobs:
 |---|---|---|
 | identity | Every commit is mine or Dependabot's and carries no AI attribution | always on |
 | node | `lint`, `typecheck`, `test`, `build`, `deploy:check`, `test:e2e`, `test:a11y` from `package.json` | `node`, `a11y` |
-| dotnet | Restore, build with warnings as errors, `dotnet format`, test (a test project is required), EF pending-model check | `dotnet` (folder or solution file), `dotnet-ef-project` |
+| dotnet | Restore (a repo's tool manifest first), build with warnings as errors, `dotnet format`, test (a test project is required), EF pending-model check with paths from the repo root | `dotnet` (folder or solution file), `dotnet-ef-project` |
 
 The baseline also covers Dependabot with auto-merge for patch and minor updates (GitHub's own actions
 only; third-party actions wait for review), secret scanning with push protection, CodeQL, and a

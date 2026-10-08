@@ -91,6 +91,16 @@ warning; course repos, the scaffold copies in workbench and the ember-black them
 hygiene check keeps its own caller file: folding it into `ward.yml` would make a README nit block
 every merge. `a11y` stays `off` in every caller until Plan 4 ships `test:a11y`.
 
+**Deviations recorded 2026-10-07 (Plan 5 patch, v1.2.1):** the rollout's first EF consumer (varde)
+showed that the EF paths were taken from the `dotnet` directory while the caller template and the
+rollout table gave them from the repository root, and that a repo's own tool manifest was never
+restored. Both are fixed in `dotnet-check.mjs` and pinned by the `dotnet-ef` fixture, which passes
+with its committed migration and is rejected when `FIXTURE_PENDING=1` adds a column the snapshot
+lacks. A tool manifest now decides which `dotnet-ef` runs, so the identity job's drift warning
+covers `.config/dotnet-tools.json` too. The canary is unchanged: its `rejects` job runs the tag's
+whole fixture suite, and the EF input in its `published` job would have gone red on the first
+Monday between merge and release.
+
 ## The caller
 
 The only CI file a repo carries:
@@ -150,7 +160,8 @@ Dependabot PR, which quote upstream release notes I do not control. A `Co-author
 address or Dependabot's passes, because GitHub adds one when a squash merge combines authors; an AI
 co-author always fails. Errors show a redacted address (first character and domain), because CI logs
 on a public repo are public. The job also warns, without failing, when a PR changes a workflow,
-`Directory.Build.props`, `biome.json`, `global.json` or the `scripts` in a `package.json`, since a PR
+`Directory.Build.props`, `biome.json`, `global.json`, `.config/dotnet-tools.json` or the `scripts` in a
+`package.json`, since a PR
 can turn its own checks off; I read those changes before merging.
 
 The identity check is a guard against misconfiguration, not authentication: author and committer
@@ -288,6 +299,11 @@ never by turning `NuGetAudit` off; the weekly audit lists every suppression. `do
 `dotnet ef migrations has-pending-model-changes` (exit 1 when I changed the model and forgot the
 migration). `os` input: `ubuntu-latest` by default, `windows-latest` for WPF. SDK from `global.json` in
 the module's directory, else at the repo root, else .NET 10.
+`dotnet-ef-project` and `dotnet-ef-startup-project` are paths from the repository root, like every
+other input, and the script makes them absolute before it changes into the `dotnet` directory. When a
+tool manifest (`.config/dotnet-tools.json`) sits in that directory or above it, `dotnet tool restore`
+runs before anything else, so the repo's pinned `dotnet-ef` is the one that runs; the global install
+in `ci.yml` is the fallback for repos without a manifest.
 
 The `dotnet` input is a directory, or a solution or project file when the directory holds more than one
 (`dotnet format` refuses a folder with a solution and a project side by side). A C# repo without a test
