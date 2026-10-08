@@ -1,0 +1,6 @@
+root = true
+
+# EF Core writes these, with a BOM and block-scoped namespaces. Marking them
+# as generated keeps the format check on the code I write.
+[**/Migrations/*.cs]
+generated_code = true
