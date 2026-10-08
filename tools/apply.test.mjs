@@ -10,13 +10,16 @@ import {
   PROPS,
   planFiles,
   planInputs,
+  planSettings,
+  readState,
   readTemplates,
   renderCaller,
   renderDependabot,
   runApply,
+  statusLine,
   writeFiles,
 } from "./apply.mjs";
-import { parseCaller } from "./repo-audit.mjs";
+import { parseCaller, request } from "./repo-audit.mjs";
 import { loadStacks } from "./stacks.mjs";
 
 const stacks = loadStacks();
@@ -531,4 +534,275 @@ test("a write that fails halfway is reported: the plan lines, what was written, 
   const last = out.lines.at(-1);
   assert.ok(last.startsWith("error   Stopped writing:"), last);
   assert.ok(existsSync(join(dir, CALLER)));
+});
+
+// A fetch stub that records method, path, auth and the parsed body of every
+// call, and answers from routes [pattern, status, body, method?]; first match
+// wins, and a route with a method answers only that method.
+function stubFetch(routes) {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url).replace("https://api.github.com", "");
+    calls.push({
+      method: init.method ?? "GET",
+      path,
+      auth: init.headers?.Authorization ?? "",
+      body: init.body ? JSON.parse(init.body) : undefined,
+    });
+    const method = init.method ?? "GET";
+    const route = routes.find(
+      ([pattern, , , only]) => pattern.test(path) && (!only || only === method),
+    );
+    if (!route) return new Response(null, { status: 599 });
+    const [, status, body] = route;
+    return new Response(body === undefined ? null : JSON.stringify(body), { status });
+  };
+  return {
+    calls,
+    writes: () => calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path]),
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+const SCAN_OFF = { status: "disabled" };
+const ON = { status: "enabled" };
+const META = {
+  full_name: "malinfossum/x",
+  default_branch: "main",
+  allow_auto_merge: false,
+  security_and_analysis: { secret_scanning: SCAN_OFF, secret_scanning_push_protection: SCAN_OFF },
+};
+const GATE = {
+  type: "required_status_checks",
+  parameters: {
+    strict_required_status_checks_policy: false,
+    required_status_checks: [{ context: "ward / gate" }],
+  },
+};
+// A bare repo: nothing on, no ruleset, CodeQL never ran. The reads answer GET
+// only, so a write needs its own route; overrides go first.
+const READS = [
+  [/^\/repos\/malinfossum\/x$/, 200, META],
+  [/\/git\/trees\/main/, 200, { truncated: false, tree: [] }],
+  [/\/contents\//, 404],
+  [/\/rules\/branches\/main$/, 200, []],
+  [/\/automated-security-fixes$/, 404],
+  [/\/vulnerability-alerts$/, 404],
+  [/\/code-scanning\/default-setup$/, 200, { state: "not-configured", languages: ["javascript"] }],
+  [/\/branches\/main\/protection$/, 404],
+  [/\/rulesets$/, 200, []],
+  [/\/code-scanning\/analyses/, 404],
+  [/\/pulls\?/, 200, []],
+].map(([pattern, status, body]) => [pattern, status, body, "GET"]);
+const WRITES = [
+  [/\/(vulnerability-alerts|automated-security-fixes)$/, 204, undefined, "PUT"],
+  [/^\/repos\/malinfossum\/x$/, 200, {}, "PATCH"],
+  [/\/code-scanning\/default-setup$/, 202, {}, "PATCH"],
+];
+const bareRoutes = (overrides = []) => [...overrides, ...READS, ...WRITES];
+const ENV = { GITHUB_TOKEN: "t" };
+
+test("request sends a JSON body with the method and the token", async () => {
+  const stub = stubFetch([[/./, 200, { ok: true }]]);
+  try {
+    const res = await request("/repos/a/b", "t", { method: "PATCH", body: { x: 1 } });
+    assert.deepEqual(res, { status: 200, body: { ok: true } });
+    assert.deepEqual(stub.calls[0], {
+      method: "PATCH",
+      path: "/repos/a/b",
+      auth: "Bearer t",
+      body: { x: 1 },
+    });
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: plans the four changes a bare repo needs and makes them only with --apply", async () => {
+  const stub = stubFetch(bareRoutes());
+  try {
+    const dry = await runApply(["settings", "malinfossum/x"], ENV);
+    assert.equal(dry.exitCode, 0);
+    assert.deepEqual(
+      dry.lines.filter((l) => l.startsWith("set")).map((l) => l.slice(8)),
+      [
+        "Dependabot alerts on",
+        "Dependabot security updates on",
+        "secret scanning and push protection on",
+        "CodeQL default setup on",
+      ],
+    );
+    assert.deepEqual(stub.writes(), []);
+    const wet = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.deepEqual(stub.writes(), [
+      ["PUT", "/repos/malinfossum/x/vulnerability-alerts"],
+      ["PUT", "/repos/malinfossum/x/automated-security-fixes"],
+      ["PATCH", "/repos/malinfossum/x"],
+      ["PATCH", "/repos/malinfossum/x/code-scanning/default-setup"],
+    ]);
+    const patches = stub.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
+    assert.deepEqual(patches[0], {
+      security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
+    });
+    assert.deepEqual(patches[1], { state: "configured", query_suite: "default" });
+    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 4);
+    assert.ok(stub.calls.every((c) => c.auth === "Bearer t"));
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: everything on is kept; a setting the token cannot read is a stop, never a blind write", async () => {
+  const onMeta = {
+    ...META,
+    security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
+  };
+  const stub = stubFetch(
+    bareRoutes([
+      [/^\/repos\/malinfossum\/x$/, 200, onMeta],
+      [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
+      [/\/vulnerability-alerts$/, 204],
+      [/\/code-scanning\/default-setup$/, 200, { state: "configured", languages: ["javascript"] }],
+    ]),
+  );
+  try {
+    const kept = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.ok(kept.lines.includes("keep    every setting is already on"));
+    assert.deepEqual(stub.writes(), []);
+  } finally {
+    stub.restore();
+  }
+  const { security_and_analysis: _, ...notAdmin } = META;
+  const blind = stubFetch(bareRoutes([[/^\/repos\/malinfossum\/x$/, 200, notAdmin]]));
+  try {
+    const stop = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(stop.exitCode, 1);
+    assert.ok(
+      stop.lines.some((l) => l.startsWith("stop    The token cannot read this repo's settings")),
+    );
+    assert.deepEqual(blind.writes(), []);
+  } finally {
+    blind.restore();
+  }
+});
+
+test("settings: an API failure mid-apply keeps the lines before it and stops", async () => {
+  const stub = stubFetch(
+    bareRoutes([[/^\/repos\/malinfossum\/x$/, 422, { message: "nope" }, "PATCH"]]),
+  );
+  try {
+    const { lines, exitCode } = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(exitCode, 1);
+    assert.deepEqual(
+      lines.filter((l) => /^(done|error)/.test(l)),
+      [
+        "done    Dependabot alerts on",
+        "done    Dependabot security updates on",
+        'error   GitHub API 422 on /repos/malinfossum/x: {"message":"nope"}',
+      ],
+    );
+    assert.equal(stub.writes().length, 3);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: a refused write (403) is an error, not done, and stops the rest", async () => {
+  const stub = stubFetch(
+    bareRoutes([[/\/automated-security-fixes$/, 403, { message: "no" }, "PUT"]]),
+  );
+  try {
+    const { lines, exitCode } = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(exitCode, 1);
+    assert.deepEqual(
+      lines.filter((l) => /^(set|done|error)/.test(l)),
+      [
+        "set     Dependabot alerts on",
+        "set     Dependabot security updates on",
+        "set     secret scanning and push protection on",
+        "set     CodeQL default setup on",
+        "done    Dependabot alerts on",
+        "error   Dependabot security updates on 403",
+      ],
+    );
+    assert.equal(stub.writes().length, 2);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("request returns the status of a write, and null for an empty body", async () => {
+  const stub = stubFetch([[/./, 204]]);
+  try {
+    assert.deepEqual(await request("/repos/a/b/x", "t", { method: "PUT" }), {
+      status: 204,
+      body: null,
+    });
+  } finally {
+    stub.restore();
+  }
+  const accepted = stubFetch([[/./, 202]]);
+  try {
+    assert.deepEqual(await request("/repos/a/b/x", "t", { method: "PATCH", body: {} }), {
+      status: 202,
+      body: null,
+    });
+  } finally {
+    accepted.restore();
+  }
+});
+
+test("settings: a repo with no CodeQL language gets a note instead of a CodeQL action", () => {
+  const baseline = {
+    alerts: true,
+    securityUpdates: { enabled: true, paused: false },
+    analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
+    codeScanning: { state: "not-configured", languages: [] },
+  };
+  const plan = planSettings(baseline);
+  assert.deepEqual(plan.actions, []);
+  assert.match(plan.notes[0], /CodeQL has no language to analyse here/);
+});
+
+test("settings and status without a token or with a bad repo name are a stop", async () => {
+  const noToken = await runApply(["settings", "malinfossum/x"], {});
+  assert.equal(noToken.exitCode, 1);
+  assert.ok(noToken.lines.some((l) => /GITHUB_TOKEN is not set/.test(l)));
+  const badName = await runApply(["status", "x"], ENV);
+  assert.equal(badName.exitCode, 1);
+  assert.ok(badName.lines[0].startsWith("usage"));
+});
+
+test("status prints one line with the state, and readState sees classic protection and open Dependabot PRs", async () => {
+  const stub = stubFetch(
+    bareRoutes([
+      [/\/branches\/main\/protection$/, 200, { enabled: true }],
+      [
+        /\/pulls\?/,
+        200,
+        [
+          { number: 7, user: { login: "dependabot[bot]" } },
+          { number: 8, user: { login: "me" } },
+        ],
+      ],
+      [/\/rules\/branches\/main$/, 200, [{ type: "deletion" }, GATE]],
+    ]),
+  );
+  try {
+    const state = await readState("malinfossum/x", "t");
+    assert.equal(state.classic, true);
+    assert.deepEqual(state.dependabotPulls, [7]);
+    assert.equal(state.analysed, false);
+    assert.equal(
+      statusLine(state),
+      "malinfossum/x: auto-merge=false secret-scanning=disabled push-protection=disabled codeql=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
+    );
+    const { lines } = await runApply(["status", "malinfossum/x"], ENV);
+    assert.equal(lines[0], `status  ${statusLine(state)}`);
+  } finally {
+    stub.restore();
+  }
 });

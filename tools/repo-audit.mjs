@@ -489,19 +489,33 @@ export function warnKindsFor(owner, env, extra = []) {
 
 // Status plus parsed body. 401, 403 and 404 come back as a status with a null
 // body, because for the settings endpoints they mean "cannot read" or "off",
-// which the checks decide. Anything else 4xx or 5xx is a real failure.
-export async function request(path, token) {
+// which the checks decide. Anything else 4xx or 5xx is a real failure. A
+// method and a JSON body are what apply.mjs needs to change a setting; a write
+// answers with its status, so the caller checks for a 2xx before it says done.
+export async function request(path, token, { method = "GET", body } = {}) {
   const res = await fetch(`${API}${path}`, {
+    method,
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "ward-repo-audit",
       "X-GitHub-Api-Version": "2022-11-28",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const silent = res.status === 204 || [401, 403, 404].includes(res.status);
-  if (res.status >= 400 && !silent) throw new Error(`GitHub API ${res.status} on ${path}`);
-  return { status: res.status, body: silent ? null : await res.json() };
+  if (res.status >= 400 && !silent) {
+    // The API says why (a validation message on a 422); the first line of it
+    // is the difference between a rerun and a search.
+    const detail = (await res.text().catch(() => "")).slice(0, 200);
+    throw new Error(`GitHub API ${res.status} on ${path}${detail ? `: ${detail}` : ""}`);
+  }
+  if (silent) return { status: res.status, body: null };
+  if (method === "GET") return { status: res.status, body: await res.json() };
+  // A write may answer 2xx with no body at all.
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : null };
 }
 
 const PROPS_OR_PROJECT = /(^|\/)(Directory\.Build\.props|[^/]+\.csproj)$/;

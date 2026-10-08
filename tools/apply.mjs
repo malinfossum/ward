@@ -16,7 +16,7 @@ import {
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { planSteps } from "./node-contract.mjs";
-import { exceptionsFor, parseCaller } from "./repo-audit.mjs";
+import { exceptionsFor, fetchRepoData, parseCaller, request } from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -402,6 +402,139 @@ export function writeFiles(dir, plan, written = []) {
   return written;
 }
 
+// Everything the settings commands decide on, read with one token that has
+// admin on the repo (locally, gh auth token). The baseline comes from the
+// same reads the audit makes, so what apply sets is what the audit checks.
+export async function readState(repo, token) {
+  const meta = (await request(`/repos/${repo}`, token)).body;
+  if (!meta) throw new Error(`Cannot read ${repo}; the token must be allowed to see it.`);
+  const data = await fetchRepoData(meta, { admin: token, read: token });
+  const branch = encodeURIComponent(meta.default_branch);
+  const at = (path) => request(`/repos/${repo}${path}`, token);
+  const classic = (await at(`/branches/${branch}/protection`)).status === 200;
+  const listed = await at("/rulesets");
+  const rulesets = (listed.body ?? []).filter((r) => r.target === "branch");
+  const existing = rulesets.length === 1 ? (await at(`/rulesets/${rulesets[0].id}`)).body : null;
+  const analyses = (await at(`/code-scanning/analyses?ref=refs/heads/${branch}&per_page=1`)).body;
+  const pulls = (await at("/pulls?state=open&per_page=100")).body ?? [];
+  return {
+    repo,
+    meta,
+    branch: meta.default_branch,
+    baseline: data.baseline,
+    classic,
+    rulesets,
+    existing,
+    analysed: Array.isArray(analyses) && analyses.length > 0,
+    dependabotPulls: pulls.filter((p) => p.user?.login === "dependabot[bot]").map((p) => p.number),
+  };
+}
+
+// The settings a repo still needs, from the baseline the audit reads. A
+// field the token could not read is a stop, never a blind write: the write
+// would fail for the same reason, and a silent retry would hide it.
+export function planSettings(baseline) {
+  const { alerts, securityUpdates, analysis, codeScanning } = baseline;
+  if ([alerts, securityUpdates, analysis, codeScanning].some((value) => value == null)) {
+    const stop = "The token cannot read this repo's settings; it needs admin on the repo.";
+    return { stops: [stop], actions: [], notes: [] };
+  }
+  const actions = [];
+  const notes = [];
+  if (!alerts)
+    actions.push({ what: "Dependabot alerts on", method: "PUT", path: "/vulnerability-alerts" });
+  if (!securityUpdates.enabled || securityUpdates.paused) {
+    actions.push({
+      what: "Dependabot security updates on",
+      method: "PUT",
+      path: "/automated-security-fixes",
+    });
+  }
+  const on = { status: "enabled" };
+  if (
+    analysis.secret_scanning?.status !== "enabled" ||
+    analysis.secret_scanning_push_protection?.status !== "enabled"
+  ) {
+    actions.push({
+      what: "secret scanning and push protection on",
+      method: "PATCH",
+      path: "",
+      body: { security_and_analysis: { secret_scanning: on, secret_scanning_push_protection: on } },
+    });
+  }
+  if (codeScanning.state !== "configured") {
+    // Same rule as checkBaseline: no languages means CodeQL cannot be turned on here.
+    const analysable = codeScanning.languages ? codeScanning.languages.length > 0 : true;
+    if (analysable) {
+      actions.push({
+        what: "CodeQL default setup on",
+        method: "PATCH",
+        path: "/code-scanning/default-setup",
+        body: { state: "configured", query_suite: "default" },
+      });
+    } else {
+      notes.push(
+        "CodeQL has no language to analyse here; the ruleset needs --no-codeql and a dated ruleset exception in stacks.json.",
+      );
+    }
+  }
+  return { stops: [], actions, notes };
+}
+
+export function statusLine(state) {
+  const analysis = state.baseline.analysis ?? {};
+  const types = (state.baseline.rules ?? []).map((rule) => rule.type).sort();
+  return [
+    `${state.repo}:`,
+    `auto-merge=${state.meta.allow_auto_merge}`,
+    `secret-scanning=${analysis.secret_scanning?.status ?? "unread"}`,
+    `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
+    `codeql=${state.baseline.codeScanning?.state ?? "unread"}`,
+    `analysed=${state.analysed}`,
+    `rulesets=${state.rulesets.length}${state.classic ? "+classic" : ""}`,
+    `rules=${types.join(",") || "none"}`,
+  ].join(" ");
+}
+
+async function settingsCommand(state, argv, token) {
+  const { stops, actions, notes } = planSettings(state.baseline);
+  const lines = stops.map((stop) => say("stop", stop));
+  for (const action of actions) lines.push(say("set", action.what));
+  for (const note of notes) lines.push(say("note", note));
+  if (stops.length) return { lines, exitCode: 1 };
+  if (!actions.length) lines.push(say("keep", "every setting is already on"));
+  if (argv.includes("--apply")) {
+    for (const action of actions) {
+      const call = () =>
+        request(`/repos/${state.repo}${action.path}`, token, {
+          method: action.method,
+          body: action.body,
+        });
+      if (!(await attempt(lines, call, action.what))) return { lines, exitCode: 1 };
+    }
+  }
+  return { lines, exitCode: 0 };
+}
+
+// One write, with its done line or its error line. Only a 2xx is done: a
+// 401, 403 or 404 comes back as a status without throwing, and a refused
+// write must not read as made. A failure mid-apply keeps the lines before it
+// and stops; a rerun is idempotent, so nothing is lost.
+async function attempt(lines, call, what) {
+  try {
+    const res = await call();
+    if (res.status >= 200 && res.status < 300) {
+      lines.push(say("done", what));
+      return true;
+    }
+    lines.push(say("error", `${what} ${res.status}`));
+    return false;
+  } catch (error) {
+    lines.push(say("error", error.message));
+    return false;
+  }
+}
+
 const say = (word, text) => `${word.padEnd(7)} ${text}`;
 const arg = (argv, flag, fallback = "") => {
   const i = argv.indexOf(flag);
@@ -461,15 +594,32 @@ export const USAGE = [
   "Settings commands read GITHUB_TOKEN (locally: GITHUB_TOKEN=$(gh auth token)).",
 ].join("\n");
 
+const SETTINGS_COMMANDS = ["settings", "ruleset", "automerge", "status"];
+const REPO = /^[\w.-]+\/[\w.-]+$/;
+
 // deps lets the tests pass their own stacks and templates.
-export async function runApply(argv, _env, deps = {}) {
+export async function runApply(argv, env, deps = {}) {
   const [command, ...rest] = argv;
   const stacks = deps.stacks ?? loadStacks();
   const templates = deps.templates ?? readTemplates();
   if (command === "files") return filesCommand(rest, { stacks, templates });
-  return { lines: [say("usage", USAGE)], exitCode: 1 };
+  if (!SETTINGS_COMMANDS.includes(command) || !REPO.test(rest[0] ?? "")) {
+    return { lines: [say("usage", USAGE)], exitCode: 1 };
+  }
+  const token = env.GITHUB_TOKEN || "";
+  if (!token) {
+    const stop = "GITHUB_TOKEN is not set; run with GITHUB_TOKEN=$(gh auth token).";
+    return { lines: [say("stop", stop)], exitCode: 1 };
+  }
+  try {
+    const state = await readState(rest[0], token);
+    if (command === "status") return { lines: [say("status", statusLine(state))], exitCode: 0 };
+    if (command === "settings") return await settingsCommand(state, rest, token);
+    return { lines: [say("usage", USAGE)], exitCode: 1 };
+  } catch (error) {
+    return { lines: [say("error", error.message)], exitCode: 1 };
+  }
 }
-
 async function main() {
   const { lines, exitCode } = await runApply(process.argv.slice(2), process.env);
   for (const line of lines) console.log(line);
