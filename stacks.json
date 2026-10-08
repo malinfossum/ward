@@ -14,6 +14,13 @@
     },
     "malinfossum/ember-black": {
       "node": "A VS Code theme: a build script and nothing to lint or test (2026-10-02)."
+    },
+    "malinfossum/portfolio": {
+      "ruleset": "HTML and CSS only, so CodeQL has no language to analyse and the ruleset carries no code-scanning rule (2026-10-08)."
+    },
+    "wendhq/wend": {
+      "caller": "Joint repo; the caller waits for the co-owner's agreement (2026-10-08).",
+      "ruleset": "Joint repo; the ruleset waits for the co-owner's agreement (2026-10-08)."
     }
   },
   "modules": [

@@ -480,8 +480,7 @@ export function expectsAdminRead(owner, env) {
 }
 
 // The warning set for one owner: WARN_KINDS, minus token where admin read is
-// promised, plus the kinds --warn-kinds names for this run (caller until Plan
-// 5 rolls the caller out, so a red run means new drift, not the rollout).
+// promised, plus the kinds --warn-kinds names for this run.
 export function warnKindsFor(owner, env, extra = []) {
   const kinds = new Set([...WARN_KINDS, ...extra]);
   if (expectsAdminRead(owner, env)) kinds.delete("token");
@@ -635,7 +634,7 @@ export async function runAudit(argv, env) {
   const includeArchived = argv.includes("--include-archived");
   const strict = arg("--mode", "warn") === "strict";
   const level = strict ? "error" : "warning";
-  // Kinds demoted to warnings for this run: `--warn-kinds caller,baseline,ruleset` until Plan 5.
+  // Kinds demoted to warnings for this run, if any.
   const extraWarn = arg("--warn-kinds", "")
     .split(",")
     .map((kind) => kind.trim())

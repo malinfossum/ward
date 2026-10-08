@@ -69,9 +69,9 @@ with Administration (read) only; every other read is public and goes through the
 the secret on Ward can read settings, never code. A fine-grained token covers one owner: org repos
 get their settings read only through `AUDIT_TOKEN_ROOKDEX` and `AUDIT_TOKEN_WENDHQ`, and without
 those the audit reports a `token` warning for them, while a `token` finding on my own repos fails
-the run. Until Plan 5 rolls the caller and the settings out, `repo-audit.yml` passes
-`--warn-kinds caller,baseline,ruleset`, so the drift Plan 5 fixes is a warning and a red audit means
-drift of another kind, not the rollout itself; Plan 5 removes the flag. Ward is MIT-licensed, the same text as workbench, so the
+the run. Until Plan 5 rolled the caller and the settings out, `repo-audit.yml` passed
+`--warn-kinds caller,baseline,ruleset`, so the drift Plan 5 fixed was a warning and a red audit meant
+drift of another kind, not the rollout itself; removed 2026-10-08 at the end of Plan 5. Ward is MIT-licensed, the same text as workbench, so the
 code that moved in keeps the licence it left with. `stacks.json` carries each module's detection
 files and the caller input it maps to; the scripts a module requires live in that module's docs, not
 in `stacks.json`. Spindle's `commit-identity.yml` retires in Plan 5, when the Ward caller replaces
