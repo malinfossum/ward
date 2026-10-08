@@ -9,6 +9,7 @@ export const GUARDED = [
   /(^|\/)Directory\.Build\.props$/,
   /(^|\/)biome\.jsonc?$/,
   /(^|\/)global\.json$/,
+  /(^|\/)dotnet-tools\.json$/,
 ];
 
 export function guardedChanges(files) {

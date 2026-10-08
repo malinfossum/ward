@@ -29,6 +29,14 @@ jobs:
       dotnet: fixtures/dotnet-ok
       dotnet-os: windows-latest
 
+  # The EF path comes from the repository root and the fixture pins its own
+  # dotnet-ef in a tool manifest, next to the one ci.yml installs globally.
+  ward-ef:
+    uses: ./.github/workflows/ci.yml
+    with:
+      dotnet: fixtures/dotnet-ef
+      dotnet-ef-project: fixtures/dotnet-ef/src/Fixture.Data
+
   fixtures:
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -67,6 +67,20 @@ test("dotnet-pick passes when given its solution file", () => {
   assert.equal(status, 0, out);
 });
 
+const EF = { EF_PROJECT: "fixtures/dotnet-ef/src/Fixture.Data" };
+
+test("dotnet-ef passes with a tool manifest and an EF path from the repo root", () => {
+  const { status, out } = run("dotnet-check.mjs", ["fixtures/dotnet-ef"], { env: EF });
+  assert.equal(status, 0, out);
+  assert.match(out, /::group::tool restore/, out);
+  assert.match(out, /::group::pending migrations/, out);
+});
+
+test("dotnet-ok runs no tool restore when there is no manifest", () => {
+  const { out } = run("dotnet-check.mjs", ["fixtures/dotnet-ok"]);
+  assert.doesNotMatch(out, /tool restore/, out);
+});
+
 // Every module in ci.yml needs a fixture it rejects: a check that never fails
 // is untested. A new module adds its cases here.
 const REJECTS = {
@@ -100,6 +114,12 @@ const REJECTS = {
       name: "dotnet-notests: no test project",
       run: () => run("dotnet-check.mjs", ["fixtures/dotnet-notests"]),
       expect: /No test project found/,
+    },
+    {
+      name: "dotnet-ef: a model change without a migration",
+      run: () =>
+        run("dotnet-check.mjs", ["fixtures/dotnet-ef"], { env: { ...EF, FIXTURE_PENDING: "1" } }),
+      expect: /::error::pending migrations failed/,
     },
   ],
 };
