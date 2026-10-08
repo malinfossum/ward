@@ -423,6 +423,7 @@ export async function readState(repo, token) {
     branch: meta.default_branch,
     baseline: data.baseline,
     classic,
+    rulesetsRead: listed.status === 200,
     rulesets,
     existing,
     analysed: Array.isArray(analyses) && analyses.length > 0,
@@ -483,7 +484,8 @@ export function planSettings(baseline) {
 
 export function statusLine(state) {
   const analysis = state.baseline.analysis ?? {};
-  const types = (state.baseline.rules ?? []).map((rule) => rule.type).sort();
+  const rules = state.baseline.rules;
+  const types = (rules ?? []).map((rule) => rule.type).sort();
   return [
     `${state.repo}:`,
     `auto-merge=${state.meta.allow_auto_merge}`,
@@ -491,8 +493,8 @@ export function statusLine(state) {
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
     `codeql=${state.baseline.codeScanning?.state ?? "unread"}`,
     `analysed=${state.analysed}`,
-    `rulesets=${state.rulesets.length}${state.classic ? "+classic" : ""}`,
-    `rules=${types.join(",") || "none"}`,
+    `rulesets=${state.rulesetsRead ? state.rulesets.length : "unread"}${state.classic ? "+classic" : ""}`,
+    `rules=${rules ? types.join(",") || "none" : "unread"}`,
   ].join(" ");
 }
 
@@ -620,6 +622,7 @@ export async function runApply(argv, env, deps = {}) {
     return { lines: [say("error", error.message)], exitCode: 1 };
   }
 }
+
 async function main() {
   const { lines, exitCode } = await runApply(process.argv.slice(2), process.env);
   for (const line of lines) console.log(line);

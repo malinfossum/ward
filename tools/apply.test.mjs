@@ -806,3 +806,22 @@ test("status prints one line with the state, and readState sees classic protecti
     stub.restore();
   }
 });
+
+test("status says unread, not none, when the ruleset list or the branch rules cannot be read", async () => {
+  const stub = stubFetch(
+    bareRoutes([
+      [/\/rulesets$/, 403],
+      [/\/rules\/branches\/main$/, 403],
+    ]),
+  );
+  try {
+    const state = await readState("malinfossum/x", "t");
+    assert.equal(state.rulesetsRead, false);
+    assert.deepEqual(state.rulesets, []);
+    assert.equal(state.existing, null);
+    const { lines } = await runApply(["status", "malinfossum/x"], ENV);
+    assert.match(lines[0], / rulesets=unread rules=unread$/);
+  } finally {
+    stub.restore();
+  }
+});
