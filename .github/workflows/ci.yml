@@ -26,8 +26,8 @@ on:
       dotnet-ef-project:
         description: >-
           EF Core project to check for model changes without a migration, as a path from the
-          repository root. Empty skips it. A .config/dotnet-tools.json in or above the dotnet
-          directory is restored first, so the repo's pinned dotnet-ef wins over the global one.
+          repository root. Empty skips it. A dotnet-tools.json (bare or under .config/) in or above
+          the dotnet directory is restored first, so the repo's pinned dotnet-ef wins over the global one.
         type: string
         default: ""
       dotnet-ef-startup-project:

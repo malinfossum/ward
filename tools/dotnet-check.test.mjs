@@ -113,6 +113,21 @@ test("a tool manifest is found in the module directory or any parent up to the r
   }
 });
 
+test("a bare dotnet-tools.json is found too, and .config/ wins in the same directory", () => {
+  const root = checkout();
+  try {
+    writeFileSync(join(root, "dotnet-tools.json"), "{}");
+    assert.equal(toolManifestNear(join(root, "api", "src"), root), join(root, "dotnet-tools.json"));
+    manifestAt(root);
+    assert.equal(
+      toolManifestNear(join(root, "api", "src"), root),
+      join(root, ".config", "dotnet-tools.json"),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the manifest lookup never climbs above the checkout root", () => {
   const root = checkout();
   try {

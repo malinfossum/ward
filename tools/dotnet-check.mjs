@@ -51,8 +51,8 @@ export function hasTestProject(csprojTexts) {
   );
 }
 
-// `dotnet` looks for .config/dotnet-tools.json from the working directory
-// upwards. A repo that pins dotnet-ef there must get that version, not the
+// `dotnet` looks for .config/dotnet-tools.json or a bare dotnet-tools.json in
+// each directory from the working directory upwards. A repo that pins dotnet-ef there must get that version, not the
 // one Ward installs globally, so the same walk decides whether to restore.
 // It stops at the checkout root: nothing on the runner outside the repo may
 // change what a repo's check does.
@@ -60,8 +60,12 @@ export function toolManifestNear(cwd, root) {
   let dir = resolve(cwd);
   const top = resolve(root);
   for (;;) {
-    const manifest = join(dir, ".config", "dotnet-tools.json");
-    if (existsSync(manifest)) return manifest;
+    for (const manifest of [
+      join(dir, ".config", "dotnet-tools.json"),
+      join(dir, "dotnet-tools.json"),
+    ]) {
+      if (existsSync(manifest)) return manifest;
+    }
     if (dir === top || dirname(dir) === dir) return "";
     dir = dirname(dir);
   }
