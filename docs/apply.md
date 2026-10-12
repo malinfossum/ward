@@ -8,7 +8,7 @@ loadout runs it for me; by hand it runs from a Ward clone at the released tag.
 
 | Command | What it reads | What `--apply` does |
 |---|---|---|
-| `files [--dir <repo>]` | The tree, every `.csproj`, the caller, `dependabot.yml`, `Directory.Build.props`, `package.json` | Writes the caller, the Dependabot config and `Directory.Build.props` where they are missing, and adds missing `lint`, `typecheck` and `deploy:check` scripts |
+| `files [--dir <repo>] [--repo <owner/name>]` | The tree, every `.csproj`, the caller, `dependabot.yml`, `Directory.Build.props`, `package.json` | Writes the caller, the Dependabot config and `Directory.Build.props` where they are missing, and adds the npm scripts the module contract needs that are missing (`deploy:check` only for a wrangler setup); a script it will not guess, such as `test`, is reported as `ask` |
 | `settings <owner/repo>` | Dependabot alerts and security updates, secret scanning and push protection, CodeQL default setup | Turns on what is off |
 | `ruleset <owner/repo> [--no-codeql] [--bypass-admin]` | Classic protection, the branch rulesets, CodeQL's analyses of the default branch | Creates or updates the one branch ruleset from `templates/ruleset.json`, keeping the repo's own rule types and required checks |
 | `automerge <owner/repo>` | The rules on the default branch, `allow_auto_merge`, open Dependabot PRs | Allows auto-merge and asks Dependabot to rebase each open PR |
@@ -39,6 +39,7 @@ One line per decision, a word padded to seven characters and then the text:
 | `stop` | A precondition is not met: two candidates at one depth, classic branch protection, two branch rulesets, a setting the token cannot read, auto-merge before the gate. Exit 1, nothing written |
 | `wait` | CodeQL has not analysed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on |
+| `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |
 | `rebase` | An open Dependabot PR that would be asked to rebase |
 | `done` | A change `--apply` made |
 | `wrote` | A file `--apply` wrote |
