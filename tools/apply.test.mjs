@@ -1082,8 +1082,28 @@ test("docs/apply.md documents every command and every output word", () => {
   for (const command of ["files", "settings", "ruleset", "automerge", "status"]) {
     assert.match(doc, new RegExp(`^\\| \`${command}[ \`]`, "m"), `${command} has no row`);
   }
-  const words = ["inputs", "create", "edit", "keep", "drift", "ask", "note", "warn", "stop", "wait", "set", "update", "rebase", "done", "wrote", "status", "usage", "error"];
-  for (const word of words) assert.match(doc, new RegExp(`^\\| \`${word}\``, "m"), `${word} has no row`);
+  const words = [
+    "inputs",
+    "create",
+    "edit",
+    "keep",
+    "drift",
+    "ask",
+    "note",
+    "warn",
+    "stop",
+    "wait",
+    "set",
+    "update",
+    "rebase",
+    "done",
+    "wrote",
+    "status",
+    "usage",
+    "error",
+  ];
+  for (const word of words)
+    assert.match(doc, new RegExp(`^\\| \`${word}\``, "m"), `${word} has no row`);
   assert.match(doc, /--apply/);
   assert.match(doc, /gh auth token/);
 });
