@@ -101,6 +101,17 @@ covers `.config/dotnet-tools.json` or `dotnet-tools.json` too. The canary is unc
 whole fixture suite, and the EF input in its `published` job would have gone red on the first
 Monday between merge and release.
 
+**Deviations recorded 2026-10-08 (Plan 3):** the skill gets Ward's code through a shallow clone of
+the `v1` tag, not a fetched `stacks.json` alone, because `apply.mjs` needs the templates and three
+sibling modules too, and the detection rules must be the released ones. An uncovered stack is a
+warning, not a stop: hugin (`powershell`) and devops-course (`docker`) carry callers with the
+covered modules on, and the weekly audit already reports the uncovered stack; drafting the module is
+the skill's last step. An existing caller, `dependabot.yml` or `Directory.Build.props` is compared
+and reported, never rewritten, so a hand edit survives a rerun. A `test` script is never guessed.
+The pre-push hook is loadout's `.githooks/pre-push` set as the global `core.hooksPath`, allowing my
+dev address, Dependabot's and GitHub's web address, with `git push --no-verify` as the deliberate
+escape when I push a co-owner's commits myself.
+
 ## The caller
 
 The only CI file a repo carries:
@@ -374,9 +385,7 @@ it works, it joins the `dotnet` module; if not, the fallback is UI Automation te
    npm scripts, then applies the repo settings through `tools/apply.mjs` — each settings change shown and
    confirmed first. It fires on "apply ward", from `project-init` after scaffolding, and when a new
    framework lands in a repo.
-2. **Unknown stack.** When a detection finds files no rule covers, the skill stops and drafts a new
-   module as a PR to Ward — it never applies a guessed config. Capacitor Android is the first expected
-   case.
+2. **Unknown stack.** When a detection finds files no rule covers, the skill applies the covered modules, says so in a warning, and drafts the new module as a PR to Ward as its last step; it never applies a guessed config. Capacitor Android is the first expected case.
 3. **The audit.** The weekly `repo-audit` adds three checks per repo: baseline settings on (Dependabot,
    secret scanning, CodeQL, ruleset), caller present on `@v1`, and no uncovered stack. It compares the
    caller's inputs on `main` with what the repo's stacks need, so a merged PR that turned a module off

@@ -18,11 +18,12 @@ jobs:
   ward:
     uses: malinfossum/ward/.github/workflows/ci.yml@v1
     with:
-      node: ""                 # npm project directory, e.g. "." or "web"
-      a11y: "off"              # off | warn | strict
-      dotnet: ""               # solution directory or file, e.g. "." or "App.slnx"
-      dotnet-os: ubuntu-latest # windows-latest for WPF
-      dotnet-ef-project: ""    # EF Core project, path from the repo root, e.g. "api/App.Data"
+      node: ""                      # npm project directory, e.g. "." or "web"
+      a11y: "off"                   # off | warn | strict
+      dotnet: ""                    # solution directory or file, e.g. "." or "App.slnx"
+      dotnet-os: ubuntu-latest      # windows-latest for WPF
+      dotnet-ef-project: ""         # EF Core project, path from the repo root, e.g. "api/App.Data"
+      dotnet-ef-startup-project: "" # startup project for dotnet ef when it differs, e.g. "api/App.Api"
 
   automerge:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
