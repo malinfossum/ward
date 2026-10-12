@@ -7,15 +7,19 @@ import { after, test } from "node:test";
 import {
   CALLER,
   DEPENDABOT,
+  mergeRuleset,
   PROPS,
+  planAutomerge,
   planFiles,
   planInputs,
+  planRuleset,
   planSettings,
   readState,
   readTemplates,
   renderCaller,
   renderDependabot,
   runApply,
+  sameRuleset,
   statusLine,
   writeFiles,
 } from "./apply.mjs";
@@ -823,5 +827,252 @@ test("status says unread, not none, when the ruleset list or the branch rules ca
     assert.match(lines[0], / rulesets=unread rules=unread$/);
   } finally {
     stub.restore();
+  }
+});
+
+const RULESET = JSON.parse(readFileSync("templates/ruleset.json", "utf8"));
+const ADMIN = [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }];
+// What the API hands back for a ruleset apply created: ids, extra parameters, same rules.
+const asExisting = (body, id = 42) => {
+  const copy = structuredClone(body);
+  const rules = copy.rules.map((rule) =>
+    rule.type === "pull_request"
+      ? { ...rule, parameters: { ...rule.parameters, allowed_merge_methods: ["squash"] } }
+      : rule,
+  );
+  return { id, ...copy, rules };
+};
+const types = (body) => body.rules.map((rule) => rule.type);
+const checks = (body) =>
+  body.rules.find((r) => r.type === "required_status_checks").parameters.required_status_checks;
+
+test("mergeRuleset keeps a repo's own required checks and foreign rule types beside the template", () => {
+  const existing = {
+    id: 1,
+    rules: [
+      { type: "required_linear_history" },
+      {
+        type: "required_status_checks",
+        parameters: {
+          strict_required_status_checks_policy: true,
+          required_status_checks: [{ context: "api-tests", integration_id: 15368 }],
+        },
+      },
+    ],
+  };
+  const body = mergeRuleset(RULESET, existing);
+  assert.deepEqual(types(body), [...types(RULESET), "required_linear_history"]);
+  assert.deepEqual(checks(body), [
+    { context: "ward / gate" },
+    { context: "api-tests", integration_id: 15368 },
+  ]);
+  assert.equal(
+    body.rules.find((r) => r.type === "required_status_checks").parameters
+      .strict_required_status_checks_policy,
+    false,
+  );
+  assert.deepEqual(body.bypass_actors, []);
+  assert.deepEqual(
+    types(mergeRuleset(RULESET, null, { noCodeql: true })),
+    types(RULESET).filter((t) => t !== "code_scanning"),
+  );
+  assert.deepEqual(mergeRuleset(RULESET, null, { bypassAdmin: true }).bypass_actors, ADMIN);
+  assert.deepEqual(RULESET.bypass_actors, [], "the template was mutated");
+});
+
+test("sameRuleset ignores what the API adds and notices what I would change", () => {
+  const body = mergeRuleset(RULESET, null);
+  assert.equal(sameRuleset(asExisting(body), body), true);
+  const withAdmin = mergeRuleset(RULESET, null, { bypassAdmin: true });
+  assert.equal(sameRuleset(asExisting(body), withAdmin), false);
+  const fewerChecks = asExisting(body);
+  checks(fewerChecks).length = 0;
+  assert.equal(sameRuleset(fewerChecks, body), false);
+  const extraRule = asExisting(body);
+  extraRule.rules.push({ type: "required_linear_history" });
+  assert.equal(sameRuleset(extraRule, body), false);
+  assert.equal(sameRuleset(extraRule, mergeRuleset(RULESET, extraRule)), true);
+});
+
+const state = (over = {}) => ({
+  repo: "malinfossum/x",
+  branch: "main",
+  meta: { allow_auto_merge: false },
+  baseline: { rules: [] },
+  classic: false,
+  rulesetsRead: true,
+  rulesets: [],
+  existing: null,
+  analysed: true,
+  dependabotPulls: [],
+  ...over,
+});
+
+test("planRuleset: classic protection or two rulesets stop; no CodeQL analysis waits unless --no-codeql", () => {
+  assert.match(
+    planRuleset(state({ classic: true }), RULESET).stops[0],
+    /Classic branch protection/,
+  );
+  assert.match(
+    planRuleset(state({ rulesetsRead: false }), RULESET).stops[0],
+    /cannot list this repo's rulesets/,
+  );
+  const two = planRuleset(state({ rulesets: [{ id: 1 }, { id: 2 }] }), RULESET);
+  assert.match(two.stops[0], /More than one branch ruleset \(1, 2\)/);
+  const waiting = planRuleset(state({ analysed: false }), RULESET);
+  assert.match(waiting.wait, /CodeQL has not analysed main yet/);
+  assert.equal(waiting.action, "");
+  const noLanguage = state({
+    analysed: false,
+    baseline: { rules: [], codeScanning: { languages: [] } },
+  });
+  assert.match(planRuleset(noLanguage, RULESET).wait, /never analyse it; rerun with --no-codeql/);
+  const skipped = planRuleset(state({ analysed: false }), RULESET, { noCodeql: true });
+  assert.equal(skipped.action, "create");
+  assert.ok(!types(skipped.body).includes("code_scanning"));
+});
+
+test("planRuleset: create when none, keep when equal, update when it differs", () => {
+  assert.equal(planRuleset(state(), RULESET).action, "create");
+  const body = mergeRuleset(RULESET, null);
+  const same = state({ rulesets: [{ id: 42 }], existing: asExisting(body) });
+  assert.equal(planRuleset(same, RULESET).action, "keep");
+  assert.equal(planRuleset(same, RULESET, { bypassAdmin: true }).action, "update");
+});
+
+test("ruleset command: POST when none, PUT by id when one, nothing without --apply or on wait", async () => {
+  const stub = stubFetch(
+    bareRoutes([
+      [/\/code-scanning\/analyses/, 200, [{ id: 1 }], "GET"],
+      [/\/rulesets$/, 201, { id: 42 }, "POST"],
+    ]),
+  );
+  try {
+    const dry = await runApply(["ruleset", "malinfossum/x"], ENV);
+    assert.ok(
+      dry.lines[0].startsWith(
+        'create  ruleset "main" with deletion, non_fast_forward, pull_request, required_status_checks, code_scanning',
+      ),
+    );
+    assert.deepEqual(stub.writes(), []);
+    const applied = await runApply(["ruleset", "malinfossum/x", "--apply", "--bypass-admin"], ENV);
+    assert.deepEqual(stub.writes(), [["POST", "/repos/malinfossum/x/rulesets"]]);
+    assert.deepEqual(stub.calls.at(-1).body.bypass_actors, ADMIN);
+    assert.equal(applied.exitCode, 0);
+    assert.equal(applied.lines.at(-1), "done    ruleset created");
+  } finally {
+    stub.restore();
+  }
+  const body = mergeRuleset(RULESET, null);
+  const one = stubFetch(
+    bareRoutes([
+      [/\/code-scanning\/analyses/, 200, [{ id: 1 }], "GET"],
+      [
+        /\/rulesets$/,
+        200,
+        [
+          { id: 42, target: "branch" },
+          { id: 43, target: "tag" },
+        ],
+        "GET",
+      ],
+      [/\/rulesets\/42$/, 200, asExisting(body), "GET"],
+      [/\/rulesets\/42$/, 200, { id: 42 }, "PUT"],
+    ]),
+  );
+  try {
+    const kept = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
+    assert.ok(kept.lines[0].startsWith("keep    ruleset"));
+    assert.deepEqual(one.writes(), []);
+    await runApply(["ruleset", "malinfossum/x", "--apply", "--no-codeql"], ENV);
+    assert.deepEqual(one.writes(), [["PUT", "/repos/malinfossum/x/rulesets/42"]]);
+  } finally {
+    one.restore();
+  }
+  const waiting = stubFetch(bareRoutes());
+  try {
+    const wait = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
+    assert.equal(wait.exitCode, 1);
+    assert.ok(wait.lines[0].startsWith("wait    CodeQL has not analysed main yet"));
+    assert.deepEqual(waiting.writes(), []);
+  } finally {
+    waiting.restore();
+  }
+});
+
+test("ruleset command: a refused write is an error line, and an unreadable protection is a stop", async () => {
+  const refused = stubFetch(
+    bareRoutes([
+      [/\/code-scanning\/analyses/, 200, [{ id: 1 }], "GET"],
+      [/\/rulesets$/, 403, { message: "no" }, "POST"],
+    ]),
+  );
+  try {
+    const result = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.lines.at(-1), "error   ruleset created 403");
+  } finally {
+    refused.restore();
+  }
+  // Classic protection reads 403 without admin, which must not pass for "no protection".
+  const blind = stubFetch(
+    bareRoutes([
+      [/\/code-scanning\/analyses/, 200, [{ id: 1 }], "GET"],
+      [/\/branches\/main\/protection$/, 403, { message: "admin" }, "GET"],
+    ]),
+  );
+  try {
+    const result = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.lines[0], /^stop {4}The token cannot list this repo's rulesets/);
+    assert.deepEqual(blind.writes(), []);
+  } finally {
+    blind.restore();
+  }
+});
+
+test("planAutomerge refuses until main requires ward / gate, then enables and rebases open Dependabot PRs", () => {
+  const refused = planAutomerge(state());
+  assert.match(refused.stops[0], /does not require "ward \/ gate"/);
+  assert.equal(refused.enable, false);
+  const ready = planAutomerge(state({ baseline: { rules: [GATE] }, dependabotPulls: [7, 9] }));
+  assert.deepEqual(ready, { stops: [], enable: true, rebase: [7, 9] });
+  const on = planAutomerge(
+    state({ baseline: { rules: [GATE] }, meta: { allow_auto_merge: true }, dependabotPulls: [3] }),
+  );
+  assert.deepEqual(on, { stops: [], enable: false, rebase: [] });
+});
+
+test("automerge command: PATCH allow_auto_merge and one rebase comment per Dependabot PR, only with --apply", async () => {
+  const stub = stubFetch(
+    bareRoutes([
+      [/\/rules\/branches\/main$/, 200, [GATE], "GET"],
+      [/\/pulls\?/, 200, [{ number: 7, user: { login: "dependabot[bot]" } }], "GET"],
+      [/\/issues\/7\/comments$/, 201, { id: 1 }, "POST"],
+    ]),
+  );
+  try {
+    const dry = await runApply(["automerge", "malinfossum/x"], ENV);
+    assert.ok(dry.lines.includes("set     allow auto-merge"));
+    assert.ok(dry.lines.includes("rebase  #7"));
+    assert.deepEqual(stub.writes(), []);
+    await runApply(["automerge", "malinfossum/x", "--apply"], ENV);
+    assert.deepEqual(stub.writes(), [
+      ["PATCH", "/repos/malinfossum/x"],
+      ["POST", "/repos/malinfossum/x/issues/7/comments"],
+    ]);
+    assert.deepEqual(stub.calls.at(-2).body, { allow_auto_merge: true });
+    assert.deepEqual(stub.calls.at(-1).body, { body: "@dependabot rebase" });
+  } finally {
+    stub.restore();
+  }
+  const unguarded = stubFetch(bareRoutes());
+  try {
+    const stop = await runApply(["automerge", "malinfossum/x", "--apply"], ENV);
+    assert.equal(stop.exitCode, 1);
+    assert.ok(stop.lines[0].startsWith("stop    main does not require"));
+    assert.deepEqual(unguarded.writes(), []);
+  } finally {
+    unguarded.restore();
   }
 });

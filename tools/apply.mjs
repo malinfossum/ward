@@ -15,8 +15,15 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { requiredChecksFrom } from "./automerge.mjs";
 import { planSteps } from "./node-contract.mjs";
-import { exceptionsFor, fetchRepoData, parseCaller, request } from "./repo-audit.mjs";
+import {
+  exceptionsFor,
+  fetchRepoData,
+  parseCaller,
+  REQUIRED_CHECK,
+  request,
+} from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -179,6 +186,7 @@ export function readTemplates(root = ROOT) {
     caller: readFileSync(join(root, "templates", "ward.yml"), "utf8"),
     dependabot: readFileSync(join(root, "templates", "dependabot.yml"), "utf8"),
     props: readFileSync(join(root, "templates", PROPS)),
+    ruleset: JSON.parse(readFileSync(join(root, "templates", "ruleset.json"), "utf8")),
   };
 }
 
@@ -411,7 +419,8 @@ export async function readState(repo, token) {
   const data = await fetchRepoData(meta, { admin: token, read: token });
   const branch = encodeURIComponent(meta.default_branch);
   const at = (path) => request(`/repos/${repo}${path}`, token);
-  const classic = (await at(`/branches/${branch}/protection`)).status === 200;
+  const protection = await at(`/branches/${branch}/protection`);
+  const classic = protection.status === 200;
   const listed = await at("/rulesets");
   const rulesets = (listed.body ?? []).filter((r) => r.target === "branch");
   const existing = rulesets.length === 1 ? (await at(`/rulesets/${rulesets[0].id}`)).body : null;
@@ -423,7 +432,9 @@ export async function readState(repo, token) {
     branch: meta.default_branch,
     baseline: data.baseline,
     classic,
-    rulesetsRead: listed.status === 200,
+    // Classic protection reads 401 or 403 without admin, which would pass for "none":
+    // a token that cannot read it cannot be trusted with a ruleset either.
+    rulesetsRead: listed.status === 200 && ![401, 403].includes(protection.status),
     rulesets,
     existing,
     analysed: Array.isArray(analyses) && analyses.length > 0,
@@ -596,6 +607,144 @@ export const USAGE = [
   "Settings commands read GITHUB_TOKEN (locally: GITHUB_TOKEN=$(gh auth token)).",
 ].join("\n");
 
+// The template over what the repo has: a rule type the template does not
+// know stays, and the repo's own required checks stay beside ward / gate
+// (workbench's test jobs, varde's api-tests). The template is never mutated.
+export function mergeRuleset(template, existing, { bypassAdmin = false, noCodeql = false } = {}) {
+  const body = structuredClone(template);
+  const have = new Set(body.rules.map((rule) => rule.type));
+  for (const rule of existing?.rules ?? []) if (!have.has(rule.type)) body.rules.push(rule);
+  const mine = body.rules.find((rule) => rule.type === "required_status_checks");
+  const theirs = existing?.rules?.find((rule) => rule.type === "required_status_checks");
+  for (const check of theirs?.parameters?.required_status_checks ?? []) {
+    if (!mine.parameters.required_status_checks.some((c) => c.context === check.context)) {
+      mine.parameters.required_status_checks.push(check);
+    }
+  }
+  if (noCodeql) body.rules = body.rules.filter((rule) => rule.type !== "code_scanning");
+  if (bypassAdmin) {
+    body.bypass_actors = [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }];
+  }
+  return body;
+}
+
+// want is contained in have: every key I would send is there with my value;
+// arrays match element for element in any order and must be the same length,
+// so a dropped check or an extra rule is a difference.
+function contains(want, have) {
+  if (Array.isArray(want)) {
+    return (
+      Array.isArray(have) &&
+      want.length === have.length &&
+      want.every((w) => have.some((h) => contains(w, h)))
+    );
+  }
+  if (want && typeof want === "object") {
+    return (
+      Boolean(have) &&
+      typeof have === "object" &&
+      Object.entries(want).every(([key, value]) => contains(value, have[key]))
+    );
+  }
+  return want === have;
+}
+
+// The API returns more than it was sent (ids, links, parameters I did not
+// set); the ruleset is the same when everything I would send is already there.
+export function sameRuleset(existing, body) {
+  const { enforcement, conditions, bypass_actors, rules } = body;
+  return contains({ enforcement, conditions, bypass_actors, rules }, existing);
+}
+
+export function planRuleset(state, template, { bypassAdmin = false, noCodeql = false } = {}) {
+  const stops = [];
+  if (!state.rulesetsRead) {
+    stops.push("The token cannot list this repo's rulesets; it needs admin on the repo.");
+  }
+  if (state.classic) {
+    stops.push("Classic branch protection is on; move it to a ruleset by hand first.");
+  }
+  if (state.rulesets.length > 1) {
+    const ids = state.rulesets.map((r) => r.id).join(", ");
+    stops.push(`More than one branch ruleset (${ids}); keep one, delete the rest, rerun.`);
+  }
+  if (stops.length) return { stops, wait: "", action: "", body: null };
+  if (!noCodeql && !state.analysed) {
+    // A repo CodeQL has no language for never gets an analysis; waiting would never end.
+    const none = state.baseline.codeScanning?.languages?.length === 0;
+    const wait = none
+      ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
+      : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
+    return { stops, wait, action: "", body: null };
+  }
+  const body = mergeRuleset(template, state.existing, { bypassAdmin, noCodeql });
+  const action = !state.existing ? "create" : sameRuleset(state.existing, body) ? "keep" : "update";
+  return { stops, wait: "", action, body };
+}
+
+async function rulesetCommand(state, argv, token, template) {
+  const plan = planRuleset(state, template, {
+    bypassAdmin: argv.includes("--bypass-admin"),
+    noCodeql: argv.includes("--no-codeql"),
+  });
+  if (plan.stops.length) return { lines: plan.stops.map((s) => say("stop", s)), exitCode: 1 };
+  if (plan.wait) return { lines: [say("wait", plan.wait)], exitCode: 1 };
+  const bypass = plan.body.bypass_actors.length ? " (repository admin bypass)" : "";
+  const what = `ruleset "${plan.body.name}" with ${plan.body.rules.map((r) => r.type).join(", ")}${bypass}`;
+  const lines = [say(plan.action, what)];
+  if (plan.action !== "keep" && argv.includes("--apply")) {
+    const create = plan.action === "create";
+    const path = create
+      ? `/repos/${state.repo}/rulesets`
+      : `/repos/${state.repo}/rulesets/${state.existing.id}`;
+    const call = () => request(path, token, { method: create ? "POST" : "PUT", body: plan.body });
+    if (!(await attempt(lines, call, `ruleset ${plan.action}d`))) return { lines, exitCode: 1 };
+  }
+  return { lines, exitCode: 0 };
+}
+
+// Auto-merge on a repo whose default branch does not require the gate merges
+// every Dependabot PR at once, so it is refused until the ruleset is there.
+export function planAutomerge(state) {
+  if (!requiredChecksFrom(state.baseline.rules ?? []).includes(REQUIRED_CHECK)) {
+    const stop = `${state.branch} does not require "${REQUIRED_CHECK}", so auto-merge now would merge every Dependabot PR at once; run ruleset first.`;
+    return { stops: [stop], enable: false, rebase: [] };
+  }
+  // The rebase nudge is for PRs that stalled before auto-merge existed; once it
+  // is on, a rerun must not ask Dependabot to rebase every open PR again.
+  const enable = !state.meta.allow_auto_merge;
+  return { stops: [], enable, rebase: enable ? state.dependabotPulls : [] };
+}
+
+async function automergeCommand(state, argv, token) {
+  const plan = planAutomerge(state);
+  if (plan.stops.length) return { lines: plan.stops.map((s) => say("stop", s)), exitCode: 1 };
+  const lines = [
+    plan.enable ? say("set", "allow auto-merge") : say("keep", "auto-merge is already on"),
+  ];
+  for (const number of plan.rebase) lines.push(say("rebase", `#${number}`));
+  if (argv.includes("--apply")) {
+    if (plan.enable) {
+      const call = () =>
+        request(`/repos/${state.repo}`, token, {
+          method: "PATCH",
+          body: { allow_auto_merge: true },
+        });
+      if (!(await attempt(lines, call, "allow auto-merge"))) return { lines, exitCode: 1 };
+    }
+    for (const number of plan.rebase) {
+      const call = () =>
+        request(`/repos/${state.repo}/issues/${number}/comments`, token, {
+          method: "POST",
+          body: { body: "@dependabot rebase" },
+        });
+      if (!(await attempt(lines, call, `rebase asked on #${number}`)))
+        return { lines, exitCode: 1 };
+    }
+  }
+  return { lines, exitCode: 0 };
+}
+
 const SETTINGS_COMMANDS = ["settings", "ruleset", "automerge", "status"];
 const REPO = /^[\w.-]+\/[\w.-]+$/;
 
@@ -617,7 +766,8 @@ export async function runApply(argv, env, deps = {}) {
     const state = await readState(rest[0], token);
     if (command === "status") return { lines: [say("status", statusLine(state))], exitCode: 0 };
     if (command === "settings") return await settingsCommand(state, rest, token);
-    return { lines: [say("usage", USAGE)], exitCode: 1 };
+    if (command === "ruleset") return await rulesetCommand(state, rest, token, templates.ruleset);
+    return await automergeCommand(state, rest, token);
   } catch (error) {
     return { lines: [say("error", error.message)], exitCode: 1 };
   }
