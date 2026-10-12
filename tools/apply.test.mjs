@@ -1076,3 +1076,14 @@ test("automerge command: PATCH allow_auto_merge and one rebase comment per Depen
     unguarded.restore();
   }
 });
+
+test("docs/apply.md documents every command and every output word", () => {
+  const doc = readFileSync("docs/apply.md", "utf8");
+  for (const command of ["files", "settings", "ruleset", "automerge", "status"]) {
+    assert.match(doc, new RegExp(`^\| \`${command}\``, "m"), `${command} has no row`);
+  }
+  const words = ["inputs", "create", "edit", "keep", "drift", "ask", "note", "warn", "stop", "wait", "set", "rebase", "done", "wrote", "status", "usage", "error"];
+  for (const word of words) assert.match(doc, new RegExp(`^\| \`${word}\``, "m"), `${word} has no row`);
+  assert.match(doc, /--apply/);
+  assert.match(doc, /gh auth token/);
+});

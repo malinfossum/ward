@@ -11,7 +11,11 @@ GitHub Actions reusable workflows, Node 24 scripts with no dependencies, `node:t
 
 ## Use it
 
-Copy [`templates/ward.yml`](templates/ward.yml) to `.github/workflows/ward.yml` and set the inputs:
+From a repo, run the `ward` skill in loadout ("apply ward"), which clones this repo at `v1` and runs
+[`tools/apply.mjs`](tools/apply.mjs): it detects the stacks, writes the caller, the Dependabot config
+and `Directory.Build.props`, adds missing npm scripts, and then applies the settings, the ruleset and
+auto-merge, each change shown before it is made ([docs](docs/apply.md)). By hand, copy
+[`templates/ward.yml`](templates/ward.yml) to `.github/workflows/ward.yml` and set the inputs:
 
 ```yaml
 jobs:
@@ -57,6 +61,6 @@ npm run lint
 | `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` |
 | `stacks.json` | Which files mean which module, and the dated `exceptions` for modules a repo keeps off on purpose; read by the audit and by the `ward` skill |
 | `docs/` | The spec, the plans, `repo-hygiene.md` and `repo-audit.md` |
-| `tools/` | The scripts each job runs, `watchdog.mjs`, and their unit tests |
+| `tools/` | The scripts each job runs, `watchdog.mjs`, `apply.mjs` (puts a repo on the standard, [docs](docs/apply.md)), and their unit tests |
 | `templates/` | What a repo copies: caller, Dependabot config, rulesets, `Directory.Build.props` |
 | `fixtures/`, `tests/` | Known-good and known-broken projects (the C# ones are xUnit) and the tests that run them |
