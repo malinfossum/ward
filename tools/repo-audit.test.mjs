@@ -87,11 +87,16 @@ test("a caller the line parser cannot read is absent, not a caller with wrong in
   assert.deepEqual(kinds(checkCaller(flow, { self: false })), ["caller"]);
 });
 
-test("a block scalar input makes the caller unreadable, the same as flow style", () => {
-  for (const marker of ["|", ">-"]) {
-    const text = `jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      node: ${marker}\n        web\n`;
-    assert.equal(parseCaller(text), null, marker);
-  }
+test("a block scalar input is read: folded after >, line by line after |", () => {
+  // hugin's caller: a second allowed address on its own line.
+  const folded = `jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      a11y: "off"\n      allowed-emails: >-\n        a@example.com,\n        1+b@users.noreply.github.com # text, not a comment\n\n  automerge:\n    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@2939fee7aac178f0fdbc4ee9505a3e0464314e0c\n`;
+  assert.deepEqual(parseCaller(folded).inputs, {
+    a11y: "off",
+    "allowed-emails": "a@example.com, 1+b@users.noreply.github.com # text, not a comment",
+  });
+  assert.deepEqual(checkCaller(folded, { self: false }), []);
+  const literal = `jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      node: |\n        web\n        api\n      dotnet: ""\n`;
+  assert.deepEqual(parseCaller(literal).inputs, { node: "web\napi", dotnet: "" });
   const quoted =
     'jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      node: "|web"\n';
   assert.deepEqual(parseCaller(quoted).inputs, { node: "|web" });

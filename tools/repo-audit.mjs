@@ -49,9 +49,10 @@ const unquote = (value) =>
 // its `with:` inputs, and the ref of the auto-merge job when there is one. The
 // file is small and written by me or the skill, so a line-based parse is
 // enough. A caller too odd to parse reads as absent, never as a caller with
-// wrong inputs: a `with:` before `uses:`, in flow style, or with a block
-// scalar input (`|` or `>`) is such a caller, and "caller missing" is a better
-// report than a false "input is empty".
+// wrong inputs: a `with:` before `uses:` or in flow style is such a caller,
+// and "caller missing" is a better report than a false "input is empty". A
+// block scalar input (`|` or `>`) is read: allowed-emails is newline
+// separated by design, so a second address is usually written that way.
 export function parseCaller(text) {
   const lines = text.split(/\r?\n/);
   const at = lines.findIndex((line) =>
@@ -77,12 +78,28 @@ export function parseCaller(text) {
   }
   const inputs = {};
   if (withAt !== -1) {
-    for (const line of lines.slice(withAt + 1)) {
+    for (let i = withAt + 1; i < lines.length; i++) {
+      const line = lines[i];
       if (skippable(line)) continue;
       if (indentOf(line) <= indent) break;
       const match = line.match(/^\s*([\w-]+):\s*(.*)$/);
       if (!match) continue;
-      if (/^[|>]/.test(match[2].trim())) return null;
+      const header = match[2].trim();
+      if (/^[|>]/.test(header)) {
+        // The value is the more-indented lines that follow: folded with spaces
+        // after `>`, kept line by line after `|`. A `#` inside one is text.
+        const keyIndent = indentOf(line);
+        const block = [];
+        while (
+          i + 1 < lines.length &&
+          (lines[i + 1].trim() === "" || indentOf(lines[i + 1]) > keyIndent)
+        ) {
+          i++;
+          block.push(lines[i].trim());
+        }
+        inputs[match[1]] = block.filter(Boolean).join(header.startsWith(">") ? " " : "\n");
+        continue;
+      }
       inputs[match[1]] = unquote(match[2]);
     }
   }
