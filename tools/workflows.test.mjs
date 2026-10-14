@@ -102,13 +102,19 @@ test("every workflow grants only contents: read at the top level", () => {
   }
 });
 
-test("every job that runs steps has a 10 or 30 minute timeout", () => {
+test("every job that runs steps has a 10 or 30 minute timeout; CodeQL's analyze gets 60", () => {
   let checked = 0;
   for (const file of workflows) {
     for (const job of jobsOf(file)) {
       if (!/^ {4}runs-on:/m.test(job.body)) continue;
       checked++;
-      assert.match(job.body, /^ {4}timeout-minutes: (10|30)$/m, `${file}: job ${job.name}`);
+      // A cold CodeQL analysis of a C# tree can outrun 30 minutes; the spec gives it 60.
+      const minutes = file.endsWith("codeql.yml") && job.name === "analyze" ? "60" : "(10|30)";
+      assert.match(
+        job.body,
+        new RegExp(`^ {4}timeout-minutes: ${minutes}$`, "m"),
+        `${file}: job ${job.name}`,
+      );
     }
   }
   assert.ok(checked > 0, "no job with runs-on was scanned");
@@ -135,7 +141,7 @@ test("every reusable workflow fetches Ward's tools at its own commit", () => {
     assert.match(readWorkflow(file), /repository: \$\{\{ job\.workflow_repository \}\}/, file);
     assert.match(readWorkflow(file), /ref: \$\{\{ job\.workflow_sha \}\}/, file);
   }
-  assert.equal(checked, 3, "ci.yml, dependabot-automerge.yml and repo-hygiene.yml");
+  assert.equal(checked, 4, "ci.yml, codeql.yml, dependabot-automerge.yml and repo-hygiene.yml");
 });
 
 // secrets.NAME, secrets['NAME'] and a reusable call with `secrets: inherit`
@@ -237,5 +243,77 @@ test("no template carries an em dash", () => {
   for (const file of readdirSync("templates")) {
     const emDash = new RegExp(String.fromCharCode(0x2014));
     assert.doesNotMatch(readFileSync(join("templates", file), "utf8"), emDash, file);
+  }
+});
+
+const CODEQL = ".github/workflows/codeql.yml";
+
+test("codeql.yml analyses every language buildless and runs nothing else where it can write", () => {
+  const text = readWorkflow(CODEQL);
+  const inits = text.split(/^ {6}- /m).filter((step) => /codeql-action\/init@/.test(step));
+  assert.ok(inits.length > 0, "no init step found");
+  for (const step of inits) assert.match(step, /^ {10}build-mode: none$/m);
+  const analyze = jobsOf(CODEQL).find((job) => job.name === "analyze");
+  assert.ok(analyze, "no analyze job in codeql.yml");
+  assert.doesNotMatch(analyze.body, /^\s*(- )?run:/m);
+  assert.doesNotMatch(analyze.body, /autobuild/);
+  const steps = [...analyze.body.matchAll(/^ {6}- (\S+):\s*([^@\s]+)/gm)].map(
+    (m) => `${m[1]} ${m[2]}`,
+  );
+  assert.deepEqual(steps, [
+    "uses actions/checkout",
+    "uses github/codeql-action/init",
+    "uses github/codeql-action/analyze",
+  ]);
+  assert.match(analyze.body, /^ {10}persist-credentials: false$/m);
+  assert.match(analyze.body, /^ {10}category: "\/language:\$\{\{ matrix\.language \}\}"$/m);
+  // init and analyze must run the same CodeQL; Dependabot bumps them together.
+  const pins = [...text.matchAll(/github\/codeql-action\/\w+@([0-9a-f]{40})/g)].map((m) => m[1]);
+  assert.equal(pins.length, 2);
+  assert.equal(new Set(pins).size, 1, "init and analyze pin different commits");
+});
+
+test("codeql.yml holds security-events: write on analyze alone, fed by the languages job", () => {
+  const text = readWorkflow(CODEQL);
+  assert.match(text, /^ {2}workflow_call:\s*$/m);
+  assert.doesNotMatch(text, /^ {4}inputs:/m, "codeql.yml takes no inputs");
+  // Comments may name the permission; only YAML lines grant it.
+  const code = (yaml) => yaml.replace(/^\s*#.*$/gm, "");
+  assert.doesNotMatch(code(text.split(/^jobs:/m)[0]), /security-events/);
+  const jobs = jobsOf(CODEQL);
+  assert.deepEqual(
+    jobs.map((job) => job.name),
+    ["languages", "analyze"],
+  );
+  const [languages, analyze] = jobs;
+  assert.doesNotMatch(code(languages.body), /security-events/);
+  assert.match(languages.body, /^ {6}languages: \$\{\{ steps\.detect\.outputs\.languages \}\}$/m);
+  assert.match(languages.body, /run: node "\$RUNNER_TEMP\/ward\/tools\/codeql-languages\.mjs"/);
+  assert.match(
+    analyze.body,
+    /^ {4}permissions:\n {6}actions: read\n {6}contents: read\n {6}security-events: write\n(?! {6})/m,
+  );
+  assert.match(analyze.body, /^ {4}needs: languages$/m);
+  assert.match(analyze.body, /^ {6}fail-fast: false$/m);
+  assert.match(
+    analyze.body,
+    /^ {8}language: \$\{\{ fromJSON\(needs\.languages\.outputs\.languages\) \}\}$/m,
+  );
+});
+
+test("only Ward's own ward.yml calls codeql.yml by local path, with what analyze needs", () => {
+  for (const file of files) {
+    if (file.replaceAll("\\", "/") === ".github/workflows/ward.yml") continue;
+    assert.doesNotMatch(
+      readFileSync(file, "utf8"),
+      /uses:\s*\.\/\.github\/workflows\/codeql\.yml/,
+      file,
+    );
+  }
+  const job = jobsOf(".github/workflows/ward.yml").find((j) => j.name === "codeql");
+  assert.ok(job, "no codeql job in ward.yml");
+  assert.match(job.body, /^ {4}uses: \.\/\.github\/workflows\/codeql\.yml$/m);
+  for (const line of ["actions: read", "contents: read", "security-events: write"]) {
+    assert.match(job.body, new RegExp(`^ {6}${line}$`, "m"), line);
   }
 });
