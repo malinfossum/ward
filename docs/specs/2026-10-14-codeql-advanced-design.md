@@ -34,9 +34,12 @@ workflow runs still wait for my "Approve and run".
    pinned `codeql` job, is a finding. The red weekly run is the reminder that gets the migration done.
 5. **Python and C/C++ join the list.** Default setup scans them today (Python in profile-dashboard and
    ember-black, C/C++ in devops-course). Leaving them out would quietly drop coverage.
-6. **Fork code never runs in the job that can write.** `build-mode: none` is not only a speed choice:
-   no build means no fork-controlled script, MSBuild target or npm hook runs next to
-   `security-events: write`. Autobuild and manual builds are off the table for that reason.
+6. **As little fork code as possible runs in the job that can write.** `build-mode: none` is not only
+   a speed choice: no build step and no npm hook runs next to `security-events: write`. Autobuild and
+   manual builds are off the table for that reason. One exception remains: C# buildless extraction
+   still runs `dotnet restore`, which evaluates the PR's MSBuild files. The real protection is the
+   fork run's read-only token and my "Approve and run", which comes after I have read the diff.
+   (Corrected 2026-10-14 while planning; CodeQL's `NugetPackageRestorer.cs`.)
 
 ## The workflow: `.github/workflows/codeql.yml`
 
