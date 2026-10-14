@@ -25,6 +25,14 @@ jobs:
       dotnet-ef-project: ""         # EF Core project, path from the repo root, e.g. "api/App.Data"
       dotnet-ef-startup-project: "" # startup project for dotnet ef when it differs, e.g. "api/App.Api"
 
+  # CodeQL on every pull request, forks included; the main ruleset waits for its results.
+  codeql:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: malinfossum/ward/.github/workflows/codeql.yml@6616cb64aca999157934d2a69d2af92d6e847011 # v1.4.0
+
   automerge:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     permissions:

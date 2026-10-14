@@ -77,3 +77,20 @@ test("fixtures carry the template Directory.Build.props unchanged", () => {
     assert.ok(template.equals(readFileSync(path)), `${path} has drifted from the template`);
   }
 });
+
+test("the caller template's codeql job is SHA-pinned and sits between ward and automerge", () => {
+  const caller = read("templates/ward.yml");
+  const jobs = caller.split(/^jobs:\r?\n/m)[1];
+  assert.deepEqual(
+    [...jobs.matchAll(/^ {2}([a-z][\w-]*):\s*$/gm)].map((m) => m[1]),
+    ["ward", "codeql", "automerge"],
+  );
+  assert.match(
+    caller,
+    /^ {4}uses: malinfossum\/ward\/\.github\/workflows\/codeql\.yml@[0-9a-f]{40} # v\d+\.\d+\.\d+$/m,
+  );
+  const block = jobs.split(/^ {2}codeql:\s*$/m)[1].split(/^ {2}automerge:/m)[0];
+  for (const line of ["actions: read", "contents: read", "security-events: write"]) {
+    assert.match(block, new RegExp(`^ {6}${line}$`, "m"), line);
+  }
+});
