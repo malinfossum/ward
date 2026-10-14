@@ -18,8 +18,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { planSteps } from "./node-contract.mjs";
 import {
+  CODEQL_PINNED,
   exceptionsFor,
   fetchRepoData,
+  indentOf,
   parseCaller,
   REQUIRED_CHECK,
   request,
@@ -263,6 +265,39 @@ export function withScripts(text, add) {
 // A Windows checkout may hold CRLF where the template holds LF; that is not drift.
 const lf = (text) => text.replaceAll("\r\n", "\n");
 
+// The template's codeql job, with the comment lines directly above it.
+function codeqlBlock(template) {
+  const lines = lf(template).split("\n");
+  const at = lines.findIndex((line) => /^ {2}codeql:\s*$/.test(line));
+  let first = at;
+  while (first > 0 && /^ {2}#/.test(lines[first - 1])) first--;
+  let last = at;
+  while (last + 1 < lines.length && lines[last + 1].trim() !== "") last++;
+  return lines.slice(first, last + 1);
+}
+
+// A caller from before v1.4.0 with the template's codeql job added: before the
+// automerge job and the comments above it, or at the end when there is none.
+// Nothing else changes, and a CRLF file stays CRLF. null when the jobs are not
+// indented two spaces like the template's, because the block would break the YAML.
+export function addCodeqlJob(text, template) {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = lf(text).split("\n");
+  const jobsAt = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  const firstJob = lines.slice(jobsAt + 1).find((line) => line.trim() && !/^\s*#/.test(line));
+  if (jobsAt === -1 || !firstJob || indentOf(firstJob) !== 2) return null;
+  const block = codeqlBlock(template);
+  let at = lines.findIndex((line) => /^ {2}automerge:\s*$/.test(line));
+  if (at === -1) {
+    while (lines.length && lines.at(-1).trim() === "") lines.pop();
+    lines.push("", ...block, "");
+  } else {
+    while (at > 0 && /^ {2}#/.test(lines[at - 1])) at--;
+    lines.splice(at, 0, ...block, "");
+  }
+  return lines.join(eol);
+}
+
 // `./web`, `web` and `web/` are one directory; `./` alone is the root.
 const bare = (value) => (value ?? "").replace(/^\.\//, "").replace(/\/$/, "") || ".";
 const sameDir = (a, b) => bare(a.replace(/^\//, "")) === bare(b.replace(/^\//, ""));
@@ -277,7 +312,9 @@ function sameInput(key, current, planned) {
 }
 
 // An input the caller leaves out counts as "", so a caller written before an
-// input existed is kept while the files say "".
+// input existed is kept while the files say "". A caller from before v1.4.0
+// gets the codeql job as an edit, unless its inputs drift: then I settle the
+// whole file by hand, and the detail names the missing job too.
 function planCaller(text, inputs, template) {
   if (text == null)
     return { path: CALLER, action: "create", content: renderCaller(template, inputs) };
@@ -292,6 +329,21 @@ function planCaller(text, inputs, template) {
       (key) =>
         `${key} is "${current.inputs[key] ?? DEFAULTS[key]}", the files say "${inputs[key]}"`,
     );
+  if (!current.codeql) {
+    if (drift.length) {
+      return { path: CALLER, action: "drift", detail: `${drift.join("; ")}; no codeql job` };
+    }
+    const content = addCodeqlJob(text, template);
+    if (content == null) {
+      const detail =
+        "jobs are not indented two spaces; add the codeql job from templates/ward.yml by hand";
+      return { path: CALLER, action: "drift", detail };
+    }
+    return { path: CALLER, action: "edit", detail: "add the codeql job", content };
+  }
+  if (!CODEQL_PINNED.test(current.codeql)) {
+    drift.push(`the codeql job uses ${current.codeql}, not a full commit SHA`);
+  }
   if (drift.length) return { path: CALLER, action: "drift", detail: drift.join("; ") };
   return { path: CALLER, action: "keep" };
 }
@@ -396,8 +448,9 @@ export function planFiles(
 }
 
 // Writes the create and edit actions under dir; returns the paths written. A
-// create uses the wx flag, so a file that exists is never overwritten even if
-// it appeared after the plan was made. An edit changes package.json scripts.
+// it appeared after the plan was made. An edit changes package.json scripts or
+// adds the caller's codeql job.
+// it appeared after the plan was made. An edit changes package.json scripts or adds the caller's codeql job.
 // written fills as it goes, so a caller still has the paths done before a throw.
 export function writeFiles(dir, plan, written = []) {
   for (const file of plan.files) {

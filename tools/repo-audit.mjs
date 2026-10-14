@@ -44,7 +44,7 @@ export function exceptionsFor(repo, stacks) {
   return hit ? hit[1] : {};
 }
 
-const indentOf = (line) => line.match(/^\s*/)[0].length;
+export const indentOf = (line) => line.match(/^\s*/)[0].length;
 const unquote = (value) =>
   value
     .replace(/\s+#.*$/, "")

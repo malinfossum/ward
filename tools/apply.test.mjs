@@ -262,6 +262,12 @@ const file = (plan, path) => plan.files.find((f) => f.path === path);
 const caller = (inputs) =>
   renderCaller(templates.caller, { ...OFF, "dotnet-ef-startup-project": "", ...inputs });
 
+// The template's codeql job with the blank line above it: a caller from before
+// v1.4.0 is the template without it.
+const CODEQL_BLOCK = /\n {2}# CodeQL[^\n]*\n {2}codeql:\n(?: {4}[^\n]*\n)+/;
+const AUTOMERGE_BLOCK = /\n {2}automerge:\n(?: {4}[^\n]*\n)+/;
+const crlf = (text) => text.replaceAll("\n", "\r\n");
+
 test("a fresh web repo gets the caller and the Dependabot config; node_modules is invisible", () => {
   const dir = repo({ "package.json": PKG, "src/app.js": "", "node_modules/x/package.json": "{}" });
   const plan = planFiles(dir, { templates });
@@ -295,7 +301,6 @@ test("a C# repo gets Directory.Build.props too; a changed copy is drift, never r
 });
 
 test("a file that differs only in line endings is kept, not drift", () => {
-  const crlf = (text) => text.replaceAll("\n", "\r\n");
   const dir = repo({
     "App.slnx": "",
     "src/App/App.csproj": "<Project />",
@@ -345,6 +350,60 @@ test("a hand-edited caller (a11y in warn, an extra address) is never overwritten
   assert.equal(file(plan, CALLER).action, "keep");
   assert.deepEqual(writeFiles(dir, plan), [DEPENDABOT]);
   assert.equal(readFileSync(join(dir, CALLER), "utf8"), text);
+});
+
+test("a caller without the codeql job gets it before automerge, in its own line endings", () => {
+  const full = caller({ node: "." });
+  const old = full.replace(CODEQL_BLOCK, "");
+  assert.notEqual(old, full, "the template has no codeql block to remove");
+  const dir = repo({ [CALLER]: old, "package.json": PKG });
+  const edit = file(planFiles(dir, { templates }), CALLER);
+  assert.deepEqual([edit.action, edit.detail], ["edit", "add the codeql job"]);
+  assert.equal(edit.content, full);
+  writeFileSync(join(dir, CALLER), crlf(old));
+  assert.equal(file(planFiles(dir, { templates }), CALLER).content, crlf(full));
+});
+
+test("a caller without automerge gets the codeql job at the end, and a hand edit survives", () => {
+  const full = caller({ node: "." })
+    .replace(AUTOMERGE_BLOCK, "")
+    .replace('a11y: "off"', 'a11y: "warn"');
+  const old = full.replace(CODEQL_BLOCK, "");
+  const dir = repo({ [CALLER]: old, "package.json": PKG });
+  const plan = planFiles(dir, { templates });
+  assert.equal(file(plan, CALLER).content, full);
+  assert.deepEqual(writeFiles(dir, plan), [CALLER, DEPENDABOT]);
+  assert.equal(readFileSync(join(dir, CALLER), "utf8"), full);
+  assert.equal(file(planFiles(dir, { templates }), CALLER).action, "keep");
+});
+
+test("input drift plus a missing codeql job stays drift; an unpinned codeql job is drift", () => {
+  const dir = repo({
+    [CALLER]: caller({ node: "." }).replace(CODEQL_BLOCK, ""),
+    "web/package.json": PKG,
+  });
+  const drift = file(planFiles(dir, { templates }), CALLER);
+  assert.equal(drift.action, "drift");
+  assert.equal(drift.detail, 'node is ".", the files say "web"; no codeql job');
+  const floating = caller({ node: "." }).replace(/codeql\.yml@[0-9a-f]{40}/, "codeql.yml@v1");
+  const pinless = repo({ [CALLER]: floating, "package.json": PKG });
+  const unpinned = file(planFiles(pinless, { templates }), CALLER);
+  assert.equal(unpinned.action, "drift");
+  assert.equal(
+    unpinned.detail,
+    "the codeql job uses malinfossum/ward/.github/workflows/codeql.yml@v1, not a full commit SHA",
+  );
+});
+
+test("a caller whose jobs are not indented two spaces is drift, never a broken edit", () => {
+  const four = caller({ node: "." }).replace(CODEQL_BLOCK, "").replace(/^( +)/gm, "$1$1");
+  const dir = repo({ [CALLER]: four, "package.json": PKG });
+  const plan = file(planFiles(dir, { templates }), CALLER);
+  assert.equal(plan.action, "drift");
+  assert.equal(
+    plan.detail,
+    "jobs are not indented two spaces; add the codeql job from templates/ward.yml by hand",
+  );
 });
 
 test("writeFiles refuses a file that appeared after the plan was made", () => {
