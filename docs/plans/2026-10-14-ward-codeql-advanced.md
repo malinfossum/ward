@@ -19,7 +19,7 @@ Copied from the spec:
 - "Its own reusable workflow, pinned by SHA." The `codeql` job "holds `security-events: write`, and a write-holding job never follows the moving `v1` tag. Still one caller file per repo."
 - "Languages are found at runtime, not set as an input." No new caller input.
 - "`build-mode: none` for every language." "No `run:` step and no autobuild in this job: the only steps are checkout, init and analyze."
-- "Fork code never runs in the job that can write."
+- "As little fork code as possible runs in the job that can write." No build step and no npm hook. "C# buildless extraction still runs `dotnet restore`"; "the real protection is the fork run's read-only token and my 'Approve and run'."
 - "The array only ever holds names from the table below, whatever the file names are." `git ls-files -z`, NUL-separated.
 - "Every action is pinned to a full SHA with a version comment, as `workflows.test.mjs` already demands."
 - "the `code_scanning` rule stays in `templates/ruleset.json`, and a fork's workflow runs still wait for my 'Approve and run'."
@@ -72,7 +72,7 @@ Each line is an input the spec implies but does not spell out as a test, with th
 | `.github/workflows/codeql.yml`, `.github/workflows/ward.yml`, `tools/workflows.test.mjs` | 2 | The workflow, Ward's own `codeql` job, the workflow guards |
 | `templates/ward.yml`, `tools/templates.test.mjs` | 2, 7 | The template's `codeql` job (interim pin in 2, final pin in 7) |
 | `tools/repo-audit.mjs`, `tools/repo-audit.test.mjs` | 3 | `parseCaller().codeql`, `CODEQL_PINNED`, `SELF_CODEQL`, `checkCaller`, `checkBaseline` flip |
-| `tools/apply.mjs`, `tools/apply.test.mjs` | 4, 5 | `addCodeqlJob` and the caller edit (4); `readState`, `planSettings`, `settingsCommand`, `statusLine`, `USAGE` (5) |
+| `tools/apply.mjs`, `tools/apply.test.mjs` | 4, 5, 6 | `addCodeqlJob` and the caller edit (4); `readState`, `planSettings`, `settingsCommand`, `statusLine`, `USAGE` (5) |
 | `docs/apply.md`, `docs/repo-audit.md`, `README.md`, `package.json`, `package-lock.json` | 6 | Docs and version 1.4.0 |
 
 ---
@@ -202,7 +202,8 @@ test("the CLI appends languages=<json> to GITHUB_OUTPUT, built only from the tab
   const line = 'languages=["actions","csharp","python"]';
   assert.equal(readFileSync(out, "utf8"), `earlier=1\n${line}\n`);
   assert.ok(run.stdout.includes(line));
-  const listed = JSON.parse(line.slice("languages=".length));
+  const written = readFileSync(out, "utf8").trim().split("\n").at(-1);
+  const listed = JSON.parse(written.slice("languages=".length));
   assert.ok(listed.every((name) => LANGUAGES.includes(name)));
 });
 
@@ -454,8 +455,9 @@ Create `.github/workflows/codeql.yml`:
 # CodeQL as a workflow, so a pull request from a fork gets analysed too; default
 # setup never analyses one. A repo calls this from its caller as the codeql job,
 # pinned to a full commit SHA, because analyze holds security-events: write.
-# Every language runs with build-mode none: no build step, so no script,
-# MSBuild target or npm hook from a fork ever runs next to that write access.
+# Every language runs with build-mode none: no build step and no npm hook
+# runs here. C# buildless extraction still runs dotnet restore, so the guard
+# is the fork run's read-only token and the owner's Approve and run.
 name: CodeQL
 
 on:
@@ -866,6 +868,8 @@ const AUTOMERGE_BLOCK = /\n {2}automerge:\n(?: {4}[^\n]*\n)+/;
 const crlf = (text) => text.replaceAll("\n", "\r\n");
 ```
 
+The test `a file that differs only in line endings is kept, not drift` holds the same `crlf` as a local; delete that local line so it does not shadow the module one.
+
 After the test `a hand-edited caller (a11y in warn, an extra address) is never overwritten`, add:
 
 ```js
@@ -938,17 +942,18 @@ import {
   CODEQL_PINNED,
   exceptionsFor,
   fetchRepoData,
+  indentOf,
   parseCaller,
   REQUIRED_CHECK,
   request,
 } from "./repo-audit.mjs";
 ```
 
+`indentOf` already lives in `tools/repo-audit.mjs` (line 41); make it `export const indentOf` there instead of copying it.
+
 Directly after `const lf = (text) => text.replaceAll("\r\n", "\n");`, add:
 
 ```js
-const indentOf = (line) => line.match(/^\s*/)[0].length;
-
 // The template's codeql job, with the comment lines directly above it.
 function codeqlBlock(template) {
   const lines = lf(template).split("\n");
@@ -1468,7 +1473,7 @@ async function settingsCommand(state, argv, token, stacks) {
   for (const action of actions) lines.push(say("set", action.what));
   for (const note of notes) lines.push(say("note", note));
   if (stops.length) return { lines, exitCode: 1 };
-  if (!actions.length) lines.push(say("keep", "every setting is already on"));
+  if (!actions.length && !notes.length) lines.push(say("keep", "every setting is already on"));
   if (argv.includes("--apply")) {
     for (const action of actions) {
       const call = () =>
@@ -1778,11 +1783,11 @@ RUN=$(gh run list --repo malinfossum/ward --branch feat/codeql-advanced --workfl
 gh run view "$RUN" --repo malinfossum/ward --log | grep -i "codeql / analyze (csharp)" | grep -i -c "dotnet restore"
 ```
 
-Expected: a count. CodeQL's buildless C# extractor runs `dotnet restore` on the solutions and projects it finds (its `NugetPackageRestorer.cs` says so), and a restore evaluates MSBuild files from the checkout. Report the count in the task report: it is the evidence for the owner's open question in "Stress test" below. Change nothing in this task because of it.
+Expected: a count. CodeQL's buildless C# extractor runs `dotnet restore` on the solutions and projects it finds (its `NugetPackageRestorer.cs` says so), and a restore evaluates MSBuild files from the checkout. Report the count in the task report: it confirms the spec's Decision 6 as corrected on 2026-10-14. Change nothing in this task because of it.
 
-- [ ] **Step 6: Unblock older open PRs**
+- [ ] **Step 6: Record older open PRs**
 
-For each PR number from Step 1: a Dependabot PR gets the comment `@dependabot rebase` (`gh pr comment <number> --body "@dependabot rebase"`); a branch of mine gets `main` merged in after this PR merges. Expected: their new runs carry CodeQL results from the workflow once `main` has it. If Step 1 listed none, record "no older PRs".
+List the PR numbers from Step 1 in the task report under "older PRs to unblock after merge". Nothing is rebased or merged in this task: a rebase before `main` has the `codeql` job gains nothing, and merging `main` into a branch is a merge. The Release section does it after the owner merges. If Step 1 listed none, record "no older PRs".
 
 ---
 
@@ -1813,6 +1818,8 @@ git rev-parse v1.4.0^{commit}
 
 Expected: the last two commands print the same commit SHA. Then watch the release-triggered canary: `sleep 300 && gh run list --repo malinfossum/ward --workflow canary.yml --limit 1 --json conclusion,event` reads `event: release`, `conclusion: success`. Once `main` has the workflow, the live audit test passes again: `GITHUB_TOKEN=$(gh auth token) npm test`.
 
+Then unblock the older open PRs that Task 8 Step 6 recorded: a Dependabot PR gets the comment `@dependabot rebase` (`gh pr comment <number> --body "@dependabot rebase"`); a branch of mine gets `main` merged in. Their new runs carry CodeQL results from the workflow now that `main` has it.
+
 ## Follow-ups (outside this PR)
 
 - The migration, one repo at a time, Hugin first, as the spec's "Migration" section lists it; the weekly audit fails every unmigrated repo until then.
@@ -1833,6 +1840,8 @@ Where the code made me adjust the spec's suggested shape:
 - The coverage guard over `--dir` reads `git ls-files` (tracked files only, as the workflow will), not `listTree`, which also counts untracked files.
 - The spec's `languages` job has `contents: read`; it inherits that from the top-level `permissions`, so it gets no job-level block.
 - `settings` is a `stop` when default setup answers `configured` without a `languages` list: the spec is silent, and a blind "off" there could drop a language.
+- `languagesFor` takes `(paths, ignore)`, not the spec's `(paths)`: the function stays pure, and the `stacks.json` prefixes are an input the tests can vary.
+- `settings` prints the `keep` line only when there is no action and no note: next to a "default setup stays on" note it would read as a contradiction of the audit, which calls that state a finding.
 
 ## Stress test (2026-10-14)
 
@@ -1840,7 +1849,7 @@ Five passes over this plan (security, privacy, accessibility, legal, loopholes),
 
 **Findings and what happened to them**
 
-- 🟠 **Security: buildless C# still runs `dotnet restore` on the checkout.** CodeQL's C# extractor (`csharp/extractor/Semmle.Extraction.CSharp.DependencyFetching/NugetPackageRestorer.cs`) restores the solutions and projects it finds, and a restore evaluates MSBuild files, so a target hooked into restore would run in `analyze`, next to `security-events: write`. That contradicts the spec's Decision 6 wording ("no ... MSBuild target ... runs next to `security-events: write`"). The real guards still hold: a fork's `pull_request` run gets a read-only token whatever the job asks for, and it waits for my "Approve and run"; for my own and Dependabot's PRs the code is mine or a reviewed bump, and the worst a hostile restore could do with `security-events: write` is upload or dismiss code-scanning results, never touch the code. **Needs the owner's call** (open question, not changed here): correct the spec's Decision 6 wording to name the read-only fork token and the approval as the guard, or look for a supported switch that turns C# dependency restore off. Proof: Task 8 Step 5b records whether the C# leg ran `dotnet restore`.
+- 🟠 **Security: buildless C# still runs `dotnet restore` on the checkout.** CodeQL's C# extractor (`csharp/extractor/Semmle.Extraction.CSharp.DependencyFetching/NugetPackageRestorer.cs`) restores the solutions and projects it finds, and a restore evaluates MSBuild files, so a target hooked into restore would run in `analyze`, next to `security-events: write`. That contradicts the spec's Decision 6 wording ("no ... MSBuild target ... runs next to `security-events: write`"). The real guards still hold: a fork's `pull_request` run gets a read-only token whatever the job asks for, and it waits for my "Approve and run"; for my own and Dependabot's PRs the code is mine or a reviewed bump, and the worst a hostile restore could do with `security-events: write` is upload or dismiss code-scanning results, never touch the code. **Resolved in `bac04bc`:** the spec's Decision 6 now names the read-only fork token and the approval as the guard. Proof: Task 8 Step 5b records whether the C# leg ran `dotnet restore`.
 - 🟡 **Loophole: default setup off while the PR cannot go green.** Applied: Task 8 Step 5 now stops and reports the same day instead of leaving `main` unscanned, and names the one command that would turn default setup back on, as the owner's call. Proof: manual, the executor in Task 8.
 - 🟡 **Loophole: `c-cpp` with `build-mode: none` is never exercised on Ward.** Applied: a follow-up names devops-course's migration PR as the proof. Proof: that PR's `codeql / analyze (c-cpp)` check.
 - 🟡 **Privacy: CodeQL Action status reports.** The action sends status reports to GitHub's own API (the same party that hosts the code and receives the SARIF). Its only switch, `CODEQL_ACTION_TEST_MODE` (`src/environment.ts` at v4.38.3), also turns off the SARIF upload, which is the whole point of the job, so it stays on. The telemetry variables the other workflows set are set here too. Proof: the existing telemetry test covers `codeql.yml`.
