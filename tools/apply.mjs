@@ -284,8 +284,9 @@ export function addCodeqlJob(text, template) {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = lf(text).split("\n");
   const jobsAt = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  if (jobsAt === -1) return null;
   const firstJob = lines.slice(jobsAt + 1).find((line) => line.trim() && !/^\s*#/.test(line));
-  if (jobsAt === -1 || !firstJob || indentOf(firstJob) !== 2) return null;
+  if (!firstJob || indentOf(firstJob) !== 2) return null;
   const block = codeqlBlock(template);
   let at = lines.findIndex((line) => /^ {2}automerge:\s*$/.test(line));
   if (at === -1) {
@@ -448,9 +449,9 @@ export function planFiles(
 }
 
 // Writes the create and edit actions under dir; returns the paths written. A
+// create uses the wx flag, so a file that exists is never overwritten even if
 // it appeared after the plan was made. An edit changes package.json scripts or
 // adds the caller's codeql job.
-// it appeared after the plan was made. An edit changes package.json scripts or adds the caller's codeql job.
 // written fills as it goes, so a caller still has the paths done before a throw.
 export function writeFiles(dir, plan, written = []) {
   for (const file of plan.files) {
