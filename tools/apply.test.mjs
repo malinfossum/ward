@@ -1372,6 +1372,9 @@ test("docs/apply.md documents every command and every output word", () => {
   ];
   for (const word of words)
     assert.match(doc, new RegExp(`^\\| \`${word}\``, "m"), `${word} has no row`);
+  assert.match(doc, /^\| `settings <owner\/repo> \[--dir <checkout>\]`/m);
+  assert.match(doc, /default-setup=not-configured/);
+  assert.match(doc, /`codeql` job/);
   assert.match(doc, /--apply/);
   assert.match(doc, /gh auth token/);
 });
