@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   auditRepo,
+  CODEQL_PINNED,
   canaryFindings,
   checkBaseline,
   checkCaller,
@@ -35,6 +36,8 @@ import { detectStacks, loadStacks } from "./stacks.mjs";
 const stacks = loadStacks();
 const kinds = (findings) => findings.map(([kind]) => kind);
 
+const CODEQL_SHA = "0123456789abcdef0123456789abcdef01234567";
+
 const CALLER = `name: Ward
 on:
   pull_request:
@@ -48,6 +51,13 @@ jobs:
       a11y: 'warn'
       dotnet: api/App.slnx
       dotnet-ef-project: ""
+
+  codeql:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: malinfossum/ward/.github/workflows/codeql.yml@${CODEQL_SHA} # v1.4.0
 
   automerge:
     if: github.event_name == 'pull_request'
@@ -73,6 +83,7 @@ test("parseCaller reads a caller with no with: block, and none for a file that n
     uses: "malinfossum/ward/.github/workflows/ci.yml@v1",
     inputs: {},
     automerge: "",
+    codeql: "",
   });
   assert.equal(parseCaller("jobs:\n  build:\n    runs-on: ubuntu-latest\n"), null);
 });
@@ -89,7 +100,7 @@ test("a caller the line parser cannot read is absent, not a caller with wrong in
 
 test("a block scalar input is read: folded after >, line by line after |", () => {
   // hugin's caller: a second allowed address on its own line.
-  const folded = `jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      a11y: "off"\n      allowed-emails: >-\n        a@example.com,\n        1+b@users.noreply.github.com # text, not a comment\n\n  automerge:\n    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@2939fee7aac178f0fdbc4ee9505a3e0464314e0c\n`;
+  const folded = `jobs:\n  ward:\n    uses: malinfossum/ward/.github/workflows/ci.yml@v1\n    with:\n      a11y: "off"\n      allowed-emails: >-\n        a@example.com,\n        1+b@users.noreply.github.com # text, not a comment\n\n  codeql:\n    uses: malinfossum/ward/.github/workflows/codeql.yml@${CODEQL_SHA}\n\n  automerge:\n    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@2939fee7aac178f0fdbc4ee9505a3e0464314e0c\n`;
   assert.deepEqual(parseCaller(folded).inputs, {
     a11y: "off",
     "allowed-emails": "a@example.com, 1+b@users.noreply.github.com # text, not a comment",
@@ -130,11 +141,13 @@ test("checkCaller wants ward.yml present and on @v1", () => {
   assert.deepEqual(checkCaller(CALLER, { self: false }), []);
 });
 
-test("Ward itself may call ci.yml by local path; nobody else may", () => {
-  const local = "jobs:\n  ward:\n    uses: ./.github/workflows/ci.yml\n    with:\n      node: .\n";
+test("Ward itself may call ci.yml and codeql.yml by local path; nobody else may", () => {
+  const local =
+    "jobs:\n  ward:\n    uses: ./.github/workflows/ci.yml\n    with:\n      node: .\n\n  codeql:\n    uses: ./.github/workflows/codeql.yml\n";
   assert.deepEqual(checkCaller(local, { self: true }), []);
-  assert.deepEqual(kinds(checkCaller(local, { self: false })), ["caller"]);
+  assert.deepEqual(kinds(checkCaller(local, { self: false })), ["caller", "caller"]);
   assert.deepEqual(parseCaller(local).inputs, { node: "." });
+  assert.equal(parseCaller(local).codeql, "./.github/workflows/codeql.yml");
 });
 
 test("the automerge job must point at Ward's dependabot-automerge.yml at a full commit SHA", () => {
@@ -156,6 +169,34 @@ test("the automerge job must point at Ward's dependabot-automerge.yml at a full 
   );
   assert.deepEqual(kinds(checkCaller(local, { self: true })), ["caller"]);
   assert.deepEqual(checkCaller(CALLER, { self: false }), []);
+});
+
+test("the codeql job must be there and call Ward's codeql.yml at a full commit SHA", () => {
+  assert.equal(
+    parseCaller(CALLER).codeql,
+    `malinfossum/ward/.github/workflows/codeql.yml@${CODEQL_SHA}`,
+  );
+  const withoutJob = CALLER.replace(/\n {2}codeql:\n(?: {4,}\S[^\n]*\n)+/, "");
+  assert.equal(parseCaller(withoutJob).codeql, "");
+  assert.deepEqual(checkCaller(withoutJob, { self: false }), [
+    ["caller", "ward.yml has no codeql job; run apply.mjs files to add it."],
+  ]);
+  const floating = CALLER.replace(`codeql.yml@${CODEQL_SHA} # v1.4.0`, "codeql.yml@v1");
+  const [unpinned] = checkCaller(floating, { self: false });
+  assert.equal(unpinned[0], "caller");
+  assert.match(unpinned[1], /codeql job uses .*codeql\.yml@v1; it must be .* at a full commit SHA/);
+  const foreign = CALLER.replace(
+    "malinfossum/ward/.github/workflows/codeql.yml",
+    "someone/else/.github/workflows/codeql.yml",
+  );
+  assert.deepEqual(kinds(checkCaller(foreign, { self: false })), ["caller"]);
+  const local = CALLER.replace(
+    `malinfossum/ward/.github/workflows/codeql.yml@${CODEQL_SHA} # v1.4.0`,
+    "./.github/workflows/codeql.yml",
+  );
+  assert.deepEqual(kinds(checkCaller(local, { self: false })), ["caller"]);
+  // The template the skill copies passes its own audit.
+  assert.match(parseCaller(readFileSync("templates/ward.yml", "utf8")).codeql, CODEQL_PINNED);
 });
 
 test("a stack whose module is off in the caller is a finding", () => {
@@ -209,7 +250,7 @@ const baseline = {
     secret_scanning: { status: "enabled" },
     secret_scanning_push_protection: { status: "enabled" },
   },
-  codeScanning: { state: "configured" },
+  codeScanning: { state: "not-configured" },
   rules: [
     { type: "deletion" },
     { type: "non_fast_forward" },
@@ -245,7 +286,7 @@ test("each baseline setting that is off is its own finding", () => {
       secret_scanning: { status: "disabled" },
       secret_scanning_push_protection: { status: "disabled" },
     },
-    codeScanning: { state: "not-configured" },
+    codeScanning: { state: "configured" },
     rules: [],
   };
   const findings = checkBaseline(off);
@@ -261,6 +302,7 @@ test("each baseline setting that is off is its own finding", () => {
     "ruleset",
     "ruleset",
   ]);
+  assert.match(findings[4][1], /CodeQL default setup is on/);
   assert.match(findings[5][1], /does not require a pull request/);
   assert.match(findings[9][1], /"ward \/ gate"/);
 });
@@ -295,14 +337,18 @@ test("a field missing from the fetched data is a token warning, not a crash", ()
   }
 });
 
-test("CodeQL off is a finding only where CodeQL has a language to analyse", () => {
-  const docsOnly = { ...baseline, codeScanning: { state: "not-configured", languages: [] } };
-  assert.deepEqual(checkBaseline(docsOnly), []);
-  const withCode = {
-    ...baseline,
-    codeScanning: { state: "not-configured", languages: ["actions"] },
-  };
-  assert.deepEqual(kinds(checkBaseline(withCode)), ["baseline"]);
+test("CodeQL default setup on is a finding; off is clean, with or without languages", () => {
+  const on = { ...baseline, codeScanning: { state: "configured", languages: ["actions"] } };
+  assert.deepEqual(checkBaseline(on), [
+    [
+      "baseline",
+      "CodeQL default setup is on; it blocks the caller's codeql job. Run apply.mjs settings.",
+    ],
+  ]);
+  for (const languages of [undefined, [], ["actions", "csharp"]]) {
+    const off = { ...baseline, codeScanning: { state: "not-configured", languages } };
+    assert.deepEqual(checkBaseline(off), [], String(languages));
+  }
 });
 
 test("a setting the token cannot read is a token warning, not a pass and not a false red", () => {
@@ -656,7 +702,7 @@ test("fetchRepoData: with admin read, 200 and 204 fill every setting", async () 
   const stub = stubFetch([
     [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
     [/\/vulnerability-alerts$/, 204],
-    [/\/code-scanning\/default-setup$/, 200, { state: "configured" }],
+    [/\/code-scanning\/default-setup$/, 200, { state: "not-configured" }],
     ...REPO_ROUTES,
   ]);
   try {
@@ -678,7 +724,7 @@ test("fetchRepoData: with admin read, a 404 on either Dependabot endpoint means 
   const stub = stubFetch([
     [/\/automated-security-fixes$/, 404],
     [/\/vulnerability-alerts$/, 404],
-    [/\/code-scanning\/default-setup$/, 200, { state: "configured" }],
+    [/\/code-scanning\/default-setup$/, 200, { state: "not-configured" }],
     ...REPO_ROUTES,
   ]);
   try {

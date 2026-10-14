@@ -1,8 +1,9 @@
-// The weekly audit over every repo I own: the baseline settings are on, the
-// caller is present on @v1 with the inputs the repo's stacks need, every NuGet
-// audit suppression carries a dated reason, no runtime is near end of life,
-// and Ward's canary is alive. Each check is a pure function over fetched data
-// that returns [kind, message] findings; main() only fetches and reports.
+// The weekly audit over every repo I own: the baseline settings are on (and
+// CodeQL default setup off), the caller is present on @v1 with the inputs the
+// repo's stacks need and a pinned codeql job, every NuGet audit suppression
+// carries a dated reason, no runtime is near end of life, and Ward's canary is
+// alive. Each check is a pure function over fetched data that returns
+// [kind, message] findings; main() only fetches and reports.
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
@@ -18,6 +19,11 @@ export const REQUIRED_CHECK = "ward / gate";
 // I move by hand; a tag or branch would let that code change under the repo.
 const AUTOMERGE_PINNED =
   /^malinfossum\/ward\/\.github\/workflows\/dependabot-automerge\.yml@[0-9a-f]{40}$/;
+
+// The codeql job holds security-events: write, so it is pinned the same way.
+// Ward calls its own copy by ./ so a pull request tests the workflow it changes.
+export const CODEQL_PINNED = /^malinfossum\/ward\/\.github\/workflows\/codeql\.yml@[0-9a-f]{40}$/;
+export const SELF_CODEQL = "./.github/workflows/codeql.yml";
 
 // Findings of these kinds are reported but never fail the run. canary-missing
 // left this set with Plan 5: a 404 for canary.yml is a deleted or renamed
@@ -46,8 +52,8 @@ const unquote = (value) =>
     .replace(/^(["'])(.*)\1$/, "$2");
 
 // Reads the job that calls ci.yml out of a caller workflow: the ref it uses,
-// its `with:` inputs, and the ref of the auto-merge job when there is one. The
-// file is small and written by me or the skill, so a line-based parse is
+// its `with:` inputs, and the refs of the auto-merge and codeql jobs when there
+// are. The file is small and written by me or the skill, so a line-based parse is
 // enough. A caller too odd to parse reads as absent, never as a caller with
 // wrong inputs: a `with:` before `uses:` or in flow style is such a caller,
 // and "caller missing" is a better report than a false "input is empty". A
@@ -103,9 +109,13 @@ export function parseCaller(text) {
       inputs[match[1]] = unquote(match[2]);
     }
   }
-  const automergeLine = lines.find((line) => /^\s*uses:\s*\S*dependabot-automerge\.yml/.test(line));
-  const automerge = automergeLine ? unquote(automergeLine.replace(/^\s*uses:\s*/, "")) : "";
-  return { uses, inputs, automerge };
+  const refOf = (pattern) => {
+    const line = lines.find((l) => pattern.test(l));
+    return line ? unquote(line.replace(/^\s*uses:\s*/, "")) : "";
+  };
+  const automerge = refOf(/^\s*uses:\s*\S*dependabot-automerge\.yml/);
+  const codeql = refOf(/^\s*uses:\s*\S*\.github\/workflows\/codeql\.yml/);
+  return { uses, inputs, automerge, codeql };
 }
 
 // self: the repo is Ward, which dogfoods ci.yml by local path.
@@ -122,6 +132,14 @@ export function checkCaller(text, { self }) {
     findings.push([
       "caller",
       `The automerge job uses ${caller.automerge}; it must be malinfossum/ward/.github/workflows/dependabot-automerge.yml at a full commit SHA.`,
+    ]);
+  }
+  if (!caller.codeql) {
+    findings.push(["caller", "ward.yml has no codeql job; run apply.mjs files to add it."]);
+  } else if (!(CODEQL_PINNED.test(caller.codeql) || (self && caller.codeql === SELF_CODEQL))) {
+    findings.push([
+      "caller",
+      `The codeql job uses ${caller.codeql}; it must be malinfossum/ward/.github/workflows/codeql.yml at a full commit SHA.`,
     ]);
   }
   return findings;
@@ -221,12 +239,12 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
     }
   }
   if (codeScanning == null) unreadable.push("CodeQL default setup");
-  else if (codeScanning.state !== "configured") {
-    // The API lists the languages CodeQL would analyse even when setup is
-    // off. A repo with none (docs only) cannot turn it on, so that is not a
-    // finding; a response without the list is read as "can", to fail closed.
-    const analysable = codeScanning.languages ? codeScanning.languages.length > 0 : true;
-    if (analysable) findings.push(["baseline", "CodeQL default setup is not configured."]);
+  else if (codeScanning.state === "configured") {
+    // GitHub refuses the codeql job's uploads while default setup is on.
+    findings.push([
+      "baseline",
+      "CodeQL default setup is on; it blocks the caller's codeql job. Run apply.mjs settings.",
+    ]);
   }
   if (rules == null) unreadable.push("branch rules");
   else {
