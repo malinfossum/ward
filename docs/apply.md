@@ -28,8 +28,8 @@ CodeQL runs as the caller's `codeql` job, which calls Ward's `codeql.yml` at a p
 GitHub refuses its uploads while default setup is on. Before it plans default setup off, `settings`
 checks that every language default setup scans (`javascript` and `typescript` count as
 `javascript-typescript`) is one `tools/codeql-languages.mjs` finds in the same tree; a language it
-would lose is a `stop`. On a private repo it prints a `note` to leave the job out: CodeQL there needs
-GitHub Advanced Security.
+would lose is a `stop`, and so is default setup that does not list its languages. On a private repo
+it prints a `note` to leave the job out: CodeQL there needs GitHub Advanced Security.
 
 The settings commands read `GITHUB_TOKEN`; locally that is `GITHUB_TOKEN=$(gh auth token)`, which
 has admin on my repos and on both orgs. The token is never printed.
@@ -48,7 +48,7 @@ One line per decision, a word padded to seven characters and then the text:
 | `ask` | A choice that is mine: a `test` script's runner |
 | `note` | A package a new script needs (I install it, the script never does), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo |
 | `warn` | Files of a stack no module covers yet; the covered modules still apply, and the module is the next PR to Ward |
-| `stop` | A precondition is not met: two candidates at one depth, classic branch protection, two branch rulesets, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a checkout of the repo, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
+| `stop` | A precondition is not met: two candidates at one depth, classic branch protection, two branch rulesets, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
 | `wait` | CodeQL has not analysed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on, or CodeQL default setup that would be turned off |
 | `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |
