@@ -27,6 +27,8 @@ import {
   parseCaller,
   REQUIRED_CHECK,
   request,
+  SELF_CODEQL,
+  WARD,
 } from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
 
@@ -267,6 +269,12 @@ export function withScripts(text, add) {
 // A Windows checkout may hold CRLF where the template holds LF; that is not drift.
 const lf = (text) => text.replaceAll("\r\n", "\n");
 
+// A job named codeql, whatever it calls.
+const hasCodeqlKey = (text) =>
+  lf(text)
+    .split("\n")
+    .some((line) => /^ {2}codeql:\s*$/.test(line));
+
 // The template's codeql job, with the comment lines directly above it.
 function codeqlBlock(template) {
   const lines = lf(template).split("\n");
@@ -281,10 +289,12 @@ function codeqlBlock(template) {
 // A caller from before v1.4.0 with the template's codeql job added: before the
 // automerge job and the comments above it, or at the end when there is none.
 // Nothing else changes, and a CRLF file stays CRLF. null when the jobs are not
-// indented two spaces like the template's, because the block would break the YAML.
+// indented two spaces like the template's, because the block would break the YAML,
+// or when a codeql job already exists, because a second key would break it too.
 export function addCodeqlJob(text, template) {
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = lf(text).split("\n");
+  if (hasCodeqlKey(text)) return null;
   const jobsAt = lines.findIndex((line) => /^jobs:\s*$/.test(line));
   if (jobsAt === -1) return null;
   const firstJob = lines.slice(jobsAt + 1).find((line) => line.trim() && !/^\s*#/.test(line));
@@ -333,6 +343,11 @@ function planCaller(text, inputs, template) {
         `${key} is "${current.inputs[key] ?? DEFAULTS[key]}", the files say "${inputs[key]}"`,
     );
   if (!current.codeql) {
+    if (hasCodeqlKey(text)) {
+      const detail =
+        "a codeql job exists but does not call malinfossum/ward/.github/workflows/codeql.yml; fix it by hand";
+      return { path: CALLER, action: "drift", detail };
+    }
     if (drift.length) {
       return { path: CALLER, action: "drift", detail: `${drift.join("; ")}; no codeql job` };
     }
@@ -595,14 +610,23 @@ export function statusLine(state) {
   ].join(" ");
 }
 
-const hasCodeqlJob = (text) => Boolean(text != null && parseCaller(lf(text))?.codeql);
+// Only Ward's own codeql workflow counts as the job. A local path means Ward's
+// scan only on Ward itself; on any other repo it points at a file that is not
+// there, and a foreign workflow is not mine, so settings must keep default setup on.
+// Any ref passes: the audit flags an unpinned one separately.
+const WARD_CODEQL = /^malinfossum\/ward\/\.github\/workflows\/codeql\.yml@.+$/;
+const hasCodeqlJob = (text, self) => {
+  const ref = text == null ? null : parseCaller(lf(text))?.codeql;
+  return Boolean(ref && (WARD_CODEQL.test(ref) || (self && ref === SELF_CODEQL)));
+};
 
 // Where settings can see the codeql job, and the tree that job will scan: the
 // default branch, or a --dir checkout of this same repo, whose caller may have
 // the job before it is merged. --dir has no default: run from a Ward clone, `.`
 // would read Ward's own caller and pass for any repo.
 function codeqlView(state, argv) {
-  const onBranch = hasCodeqlJob(state.caller);
+  const self = state.repo.toLowerCase() === WARD;
+  const onBranch = hasCodeqlJob(state.caller, self);
   if (!argv.includes("--dir")) return { job: onBranch, paths: state.tree };
   const dir = arg(argv, "--dir");
   if (!dir || !existsSync(dir)) {
@@ -614,7 +638,7 @@ function codeqlView(state, argv) {
   }
   const local = join(dir, CALLER);
   const text = existsSync(local) ? readFileSync(local, "utf8") : null;
-  return { job: onBranch || hasCodeqlJob(text), paths: trackedFiles(dir) ?? [] };
+  return { job: onBranch || hasCodeqlJob(text, self), paths: trackedFiles(dir) ?? [] };
 }
 
 async function settingsCommand(state, argv, token, stacks) {

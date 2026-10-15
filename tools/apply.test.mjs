@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import {
+  addCodeqlJob,
   CALLER,
   DEPENDABOT,
   mergeRuleset,
@@ -393,6 +394,25 @@ test("input drift plus a missing codeql job stays drift; an unpinned codeql job 
     unpinned.detail,
     "the codeql job uses malinfossum/ward/.github/workflows/codeql.yml@v1, not a full commit SHA",
   );
+});
+
+test("a codeql job that calls something else is drift, never a second codeql key", () => {
+  const foreign = caller({ node: "." }).replace(
+    /uses: malinfossum\/ward\/\.github\/workflows\/codeql\.yml@\S+/,
+    "uses: github/codeql-action/analyze@v3",
+  );
+  assert.equal(addCodeqlJob(foreign, templates.caller), null);
+  const dir = repo({ [CALLER]: foreign, "package.json": PKG });
+  const plan = planFiles(dir, { templates });
+  const drift = file(plan, CALLER);
+  assert.equal(drift.action, "drift");
+  assert.equal(
+    drift.detail,
+    "a codeql job exists but does not call malinfossum/ward/.github/workflows/codeql.yml; fix it by hand",
+  );
+  assert.equal(drift.content, undefined);
+  writeFiles(dir, plan);
+  assert.equal(readFileSync(join(dir, CALLER), "utf8"), foreign);
 });
 
 test("a caller whose jobs are not indented two spaces is drift, never a broken edit", () => {
@@ -918,6 +938,53 @@ test("settings: default setup stays on, with a note, while no caller has the cod
     );
     assert.ok(!out.lines.some((l) => l.startsWith("set")));
     assert.ok(!out.lines.some((l) => l.startsWith("keep")));
+    assert.deepEqual(stub.writes(), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+// The codeql job's ref is the part that decides whether Ward's scan will run.
+const withRef = (ref) =>
+  WITH_JOB.replace(/uses: malinfossum\/ward\/\.github\/workflows\/codeql\.yml@\S+/, `uses: ${ref}`);
+
+for (const [what, ref] of [
+  ["a local path on a repo that is not Ward", "./.github/workflows/codeql.yml"],
+  ["a foreign workflow", `other/repo/.github/workflows/codeql.yml@${"a".repeat(40)}`],
+]) {
+  test(`settings: default setup stays on when the codeql job is ${what}`, async () => {
+    const stub = stubFetch(
+      settled([defaultSetupOn(["actions"]), treeOf([CALLER]), onBranch(withRef(ref))]),
+    );
+    try {
+      const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+      assert.equal(out.exitCode, 0);
+      assert.ok(
+        out.lines.includes(
+          "note    CodeQL default setup stays on until the caller has the codeql job; run files --apply, then settings --dir <checkout>.",
+        ),
+      );
+      assert.ok(!out.lines.some((l) => l.startsWith("set")));
+      assert.deepEqual(stub.writes(), []);
+    } finally {
+      stub.restore();
+    }
+  });
+}
+
+test("settings: on Ward itself the local codeql path counts as the job", async () => {
+  const stub = stubFetch(
+    settled([
+      [/^\/repos\/malinfossum\/ward$/, 200, { ...SET_ON, full_name: "malinfossum/ward" }, "GET"],
+      defaultSetupOn(["actions", "javascript"]),
+      treeOf([CALLER, "src/app.js"]),
+      onBranch(withRef("./.github/workflows/codeql.yml")),
+    ]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/ward"], ENV);
+    assert.equal(out.exitCode, 0);
+    assert.ok(out.lines.includes("set     CodeQL default setup off"));
     assert.deepEqual(stub.writes(), []);
   } finally {
     stub.restore();
