@@ -402,6 +402,10 @@ test("a codeql job that calls something else is drift, never a second codeql key
     "uses: github/codeql-action/analyze@v3",
   );
   assert.equal(addCodeqlJob(foreign, templates.caller), null);
+  const commented = foreign.replace("  codeql:", "  codeql: # scan");
+  assert.equal(addCodeqlJob(commented, templates.caller), null);
+  const quoted = foreign.replace("  codeql:", '  "codeql":');
+  assert.equal(addCodeqlJob(quoted, templates.caller), null);
   const dir = repo({ [CALLER]: foreign, "package.json": PKG });
   const plan = planFiles(dir, { templates });
   const drift = file(plan, CALLER);

@@ -269,11 +269,11 @@ export function withScripts(text, add) {
 // A Windows checkout may hold CRLF where the template holds LF; that is not drift.
 const lf = (text) => text.replaceAll("\r\n", "\n");
 
-// A job named codeql, whatever it calls.
+// A job named codeql, whatever it calls, quoted or with a comment after the key too.
 const hasCodeqlKey = (text) =>
   lf(text)
     .split("\n")
-    .some((line) => /^ {2}codeql:\s*$/.test(line));
+    .some((line) => /^ {2}["']?codeql["']?:\s*(#.*)?$/.test(line));
 
 // The template's codeql job, with the comment lines directly above it.
 function codeqlBlock(template) {
