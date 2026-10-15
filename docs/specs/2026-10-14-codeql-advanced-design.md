@@ -202,6 +202,10 @@ designed then, not now.
 - **Skipping the job on private repos at runtime.** The schedule event carries no `repository`
   payload to read visibility from, and an API call per run is weight for a case with no repo in it
   today. The `settings` note covers it; revisit when a private repo is warded.
+- **Making `settings`, `files` and the audit agree on a private repo without GHAS.** Today `settings`
+  notes to leave the codeql job out, while `files` and the audit still want the job, so the advice
+  contradicts itself. No private repo is warded, so the fix waits for the first one rather than
+  carrying code for a case with no repo in it.
 - **Leaving out vendored but unminified scripts** (`wwwroot/lib/jquery.js` in ASP.NET scaffolds).
   Default setup scans them too, so this is no regression, and a path list would drift.
 - **An audit check on the age of the last analysis.** GitHub turns off scheduled runs after 60 days
