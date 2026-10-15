@@ -23,7 +23,7 @@ Copied from the spec:
 - "The array only ever holds names from the table below, whatever the file names are." `git ls-files -z`, NUL-separated.
 - "Every action is pinned to a full SHA with a version comment, as `workflows.test.mjs` already demands."
 - "the `code_scanning` rule stays in `templates/ruleset.json`, and a fork's workflow runs still wait for my 'Approve and run'."
-- "Ward PRs are merged with a merge commit, never squashed, so the branch commit stays reachable from `main` and from `v1.4.0`. Any later change to either file on the branch means a new pin before merge."
+- "Ward PRs are merged with a merge commit, never squashed, so the branch commit stays reachable from `main` and from `v1.4.0`. Any later change to those files on the branch means a new pin before merge."
 - "`--dir` has no default." "A `--dir` whose origin is a different repo than the argument is a `stop`."
 - "A repo is never left unscanned by accident."
 - "`package.json` version to `1.4.0`; the tag and release are a separate step on my go."
@@ -1660,17 +1660,17 @@ git commit -m "Document the codeql job and bump Ward to 1.4.0"
 
 **Interfaces:**
 - Consumes: the template's interim pin from Task 2.
-- Produces: `templates/ward.yml` pins `codeql.yml` to the last branch commit that changed `.github/workflows/codeql.yml` or `tools/codeql-languages.mjs`, with `# v1.4.0`. Any later change to either file means repeating this task before merge.
+- Produces: `templates/ward.yml` pins `codeql.yml` to the last branch commit that changed `.github/workflows/codeql.yml`, `tools/codeql-languages.mjs`, `tools/stacks.mjs` or `stacks.json`, with `# v1.4.0`. Any later change to one of them means repeating this task before merge.
 
 - [ ] **Step 1: Find the pin**
 
 ```bash
-PIN=$(git log -1 --format=%H -- .github/workflows/codeql.yml tools/codeql-languages.mjs)
+PIN=$(git log -1 --format=%H -- .github/workflows/codeql.yml tools/codeql-languages.mjs tools/stacks.mjs stacks.json)
 echo "$PIN"
 grep -n "codeql.yml@" templates/ward.yml
 ```
 
-Expected: a 40-hex SHA. If no task after Task 2 changed either file, it equals the SHA already in the template.
+Expected: a 40-hex SHA. If no task after Task 2 changed any of those files, it equals the SHA already in the template.
 
 - [ ] **Step 2: Set it (only when it differs)**
 
@@ -1684,7 +1684,7 @@ Expected: either no diff (the interim pin was already final; skip Step 4's commi
 - [ ] **Step 3: Check the pin holds the final files**
 
 ```bash
-git diff --quiet "$PIN" HEAD -- .github/workflows/codeql.yml tools/codeql-languages.mjs && echo "pin matches HEAD"
+git diff --quiet "$PIN" HEAD -- .github/workflows/codeql.yml tools/codeql-languages.mjs tools/stacks.mjs stacks.json && echo "pin matches HEAD"
 git merge-base --is-ancestor "$PIN" HEAD && echo "pin is on this branch"
 npm test && npm run lint
 ```
@@ -1799,7 +1799,7 @@ Not a task. These steps run only when I say so, after I have merged the PR **wit
 git switch main && git pull --ff-only
 PIN=$(sed -nE 's#.*codeql\.yml@([0-9a-f]{40}).*#\1#p' templates/ward.yml)
 git merge-base --is-ancestor "$PIN" HEAD && echo "pin is on main"
-git diff --quiet "$PIN" HEAD -- .github/workflows/codeql.yml tools/codeql-languages.mjs && echo "pin matches main"
+git diff --quiet "$PIN" HEAD -- .github/workflows/codeql.yml tools/codeql-languages.mjs tools/stacks.mjs stacks.json && echo "pin matches main"
 ```
 
 Both lines must print; if either does not, stop: the template needs a new pin in a follow-up PR first. Then:
@@ -1807,7 +1807,7 @@ Both lines must print; if either does not, stop: the template needs a new pin in
 ```bash
 git tag -a v1.4.0 -m "Ward 1.4.0: CodeQL as a workflow" \
   && git merge-base --is-ancestor "$PIN" v1.4.0 && echo "pin is in v1.4.0" \
-  && git diff --quiet "$PIN" v1.4.0 -- .github/workflows/codeql.yml tools/codeql-languages.mjs && echo "pin matches v1.4.0" \
+  && git diff --quiet "$PIN" v1.4.0 -- .github/workflows/codeql.yml tools/codeql-languages.mjs tools/stacks.mjs stacks.json && echo "pin matches v1.4.0" \
   && git tag -fa v1 -m "Ward v1: currently v1.4.0" v1.4.0^{commit} \
   && git push origin v1.4.0 \
   && git push --force origin v1 \

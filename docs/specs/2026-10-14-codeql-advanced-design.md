@@ -102,12 +102,12 @@ is right.
 ```
 
 **The first pin.** The SHA has to exist before the release that ships it. The template pins the
-branch commit that holds the final `codeql.yml` and `tools/codeql-languages.mjs` (the workflow fetches
-its tools at that same commit). Ward PRs are merged with a merge commit, never squashed, so the
-branch commit stays reachable from `main` and from `v1.4.0`. Any later change to either file on the
+branch commit that holds the final `codeql.yml`, `tools/codeql-languages.mjs`, `tools/stacks.mjs` and
+`stacks.json` (the workflow fetches its tools at that same commit). Ward PRs are merged with a merge commit, never squashed, so the
+branch commit stays reachable from `main` and from `v1.4.0`. Any later change to one of those files on the
 branch means a new pin before merge. Before the tag, the release step checks
 `git merge-base --is-ancestor <pin> v1.4.0` and that `git diff <pin> v1.4.0 -- .github/workflows/codeql.yml
-tools/codeql-languages.mjs` is empty. From the next release on, Dependabot proposes the new pin in
+tools/codeql-languages.mjs tools/stacks.mjs stacks.json` is empty. From the next release on, Dependabot proposes the new pin in
 every repo, as it does for `automerge`; `automerge.mjs` already refuses any `malinfossum/ward` bump,
 so I merge each one by hand.
 
