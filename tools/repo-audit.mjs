@@ -281,6 +281,9 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
 export const CANARY = "canary.yml";
 export const MAX_AGE_DAYS = 8;
 export const EOL_WINDOW_DAYS = 90;
+// The node-version a caller gets when it sets none: ci.yml's default, which
+// tools/workflows.test.mjs keeps in step with this line and Ward's own jobs.
+export const NODE_DEFAULT = "26";
 
 // Verified on endoflife.date on 2026-09-30. Add a line when a runtime ships.
 // Retired runtimes stay listed, so they read as past end of life instead of
@@ -463,7 +466,7 @@ export function auditRepo({ repo = "", tree, caller, files, baseline, self }, { 
   findings.push(...checkInputs(inputs, detectStacks(tree, stacks), tree, exceptions));
   const suppressions = findSuppressions(files);
   findings.push(...checkSuppressions(suppressions));
-  const nodeVersion = inputs?.node ? inputs["node-version"] || "24" : "";
+  const nodeVersion = inputs?.node ? inputs["node-version"] || NODE_DEFAULT : "";
   findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
   // A joint repo can defer a whole kind until the co-owner agrees; the
   // weekly warning keeps it visible and dated.

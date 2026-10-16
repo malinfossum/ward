@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { NODE_DEFAULT } from "./repo-audit.mjs";
 
 const files = [
   ...readdirSync(".github/workflows").map((f) => join(".github/workflows", f)),
@@ -24,6 +25,20 @@ test("every action is pinned to a full SHA with a version comment", () => {
   // If no `uses:` line ever matched, the loop above ran zero assertions and
   // this test would pass whether or not any action is actually pinned.
   assert.ok(matched > 0, "no uses: line was scanned across the workflow files");
+});
+
+test("ci.yml's node-version default, the audit's fallback and Ward's own jobs name one Node", () => {
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const input = ci.match(/^ {6}node-version:\r?\n(?: {8}\S.*\r?\n)*? {8}default: "(\d+)"$/m);
+  assert.equal(input?.[1], NODE_DEFAULT, "ci.yml's node-version default");
+  let matched = 0;
+  for (const file of files) {
+    for (const [, version] of readFileSync(file, "utf8").matchAll(/^\s+node-version: "(\d+)"$/gm)) {
+      assert.equal(version, NODE_DEFAULT, `${file} sets up Node ${version}`);
+      matched++;
+    }
+  }
+  assert.ok(matched >= 7, `only ${matched} setup-node steps name a version`);
 });
 
 test("no workflow uses pull_request_target", () => {
