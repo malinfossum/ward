@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Shared CI, security and accessibility checks for all my repos.",
   "engines": {
-    "node": ">=24"
+    "node": ">=26"
   },
   "scripts": {
     "lint": "biome ci .",

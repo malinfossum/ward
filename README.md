@@ -7,7 +7,7 @@ single required check, `ward / gate`, so a red check always blocks a merge.
 
 ## Stack
 
-GitHub Actions reusable workflows, Node 24 scripts with no dependencies, `node:test`, Biome.
+GitHub Actions reusable workflows, Node 26 scripts with no dependencies, `node:test`, Biome.
 
 ## Use it
 
