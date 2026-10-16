@@ -53,21 +53,26 @@ const EF_PACKAGE = /Microsoft\.EntityFrameworkCore(?:\.(?!(?:Design|Tools)\b)[\w
 const EF_DESIGN = /Microsoft\.EntityFrameworkCore\.Design(?![\w.])/;
 
 // The shallowest of the candidates; a tie is a stop, because the choice is
-// then mine, not the script's.
-function pickOne(paths, what, module, stops) {
+// then mine, not the script's. inputs names the caller inputs the tie leaves
+// unset, the one the choice is for first, so an existing caller that already
+// sets it can settle the stop.
+function pickOne(paths, what, module, inputs, stops) {
   if (paths.length === 0) return "";
   const top = Math.min(...paths.map(depth));
   const shallowest = paths.filter((path) => depth(path) === top);
   if (shallowest.length === 1) return shallowest[0];
   const text = `More than one ${what} at the same depth (${shallowest.join(", ")}); set that input yourself.`;
-  stops.push({ module, text });
+  stops.push({ module, inputs, text });
   return "";
 }
+
+const EF_INPUTS = ["dotnet-ef-project", "dotnet-ef-startup-project"];
 
 // The caller inputs and the Dependabot blocks a tree needs. paths are
 // repo-relative with forward slashes; csproj holds the text of every .csproj
 // in paths, by path. A planned stack is reported as uncovered, never guessed.
-// Each stop names the module (node or dotnet) whose choice it blocks.
+// Each stop names the module (node or dotnet) whose choice it blocks and the
+// inputs it leaves unset.
 export function planInputs(paths, csproj, stacks) {
   const stops = [];
   const kept = paths.filter((path) => !ignored(path, stacks.ignore));
@@ -76,30 +81,33 @@ export function planInputs(paths, csproj, stacks) {
   const uncovered = detected.filter((stack) => stack.status !== "shipped").map((s) => s.name);
 
   const manifests = filesOf("node");
-  const manifest = pickOne(manifests, "package.json", "node", stops);
+  const manifest = pickOne(manifests, "package.json", "node", ["node"], stops);
   const solutions = filesOf("dotnet").filter((path) => /\.slnx?$/.test(path));
   const projects = filesOf("dotnet").filter((path) => path.endsWith(".csproj"));
   const dotnet = solutions.length
-    ? pickOne(solutions, "solution file", "dotnet", stops)
-    : pickOne(projects, "project file with no solution above it", "dotnet", stops);
+    ? pickOne(solutions, "solution file", "dotnet", ["dotnet"], stops)
+    : pickOne(projects, "project file with no solution above it", "dotnet", ["dotnet"], stops);
   const text = (path) => csproj[path] ?? "";
   const wpf = projects.some((path) => /<UseWPF>\s*true\s*<\/UseWPF>/i.test(text(path)));
 
   // The project with the DbContext packages is the EF project; the one with
   // Design is the startup project when it is a different project. A repo with
-  // only a Design reference has one project doing both jobs.
+  // only a Design reference has one project doing both jobs, so a tie there
+  // leaves both inputs unset; beside an EF project it only leaves the startup.
   const withEf = projects.filter((path) => EF_PACKAGE.test(text(path)));
   const withDesign = projects.filter((path) => EF_DESIGN.test(text(path)));
   const efPick = pickOne(
     withEf,
     "project referencing Microsoft.EntityFrameworkCore",
     "dotnet",
+    EF_INPUTS,
     stops,
   );
   const designPick = pickOne(
     withDesign,
     "project referencing Microsoft.EntityFrameworkCore.Design",
     "dotnet",
+    withEf.length ? ["dotnet-ef-startup-project"] : EF_INPUTS,
     stops,
   );
   const ef = withEf.length ? efPick : designPick;
@@ -405,6 +413,23 @@ function applyExceptions(inputs, stacks, exceptions, stops) {
   return notes;
 }
 
+// A caller that exists has already settled the inputs it sets: a tie for one
+// of them is not a stop, and the caller's value is what the files say, so the
+// caller is kept (or only gets the codeql job). An input the tie leaves unset
+// beside it (the startup project with the EF project) follows the caller too,
+// "" when the caller leaves it out, as planCaller reads it. A tie for an input
+// the caller does not mention, or a caller that does not call Ward, stays a
+// stop. The stops that remain come back; inputs is changed in place.
+function settleByCaller(text, inputs, stops) {
+  const current = text == null ? null : parseCaller(lf(text));
+  if (!current) return stops;
+  return stops.filter((stop) => {
+    if (!Object.hasOwn(current.inputs, stop.inputs[0])) return true;
+    for (const key of stop.inputs) inputs[key] = current.inputs[key] ?? DEFAULTS[key];
+    return false;
+  });
+}
+
 // What the repo at dir should carry, and what it carries today. Nothing here
 // overwrites: a file that exists and differs is drift for me to settle by
 // hand, so a hand edit (a co-owner's address, a11y in warn) survives a rerun.
@@ -423,12 +448,22 @@ export function planFiles(
   const files = [];
   const notes = applyExceptions(inputs, stacks, exceptions, planned.stops);
   // A module kept off on purpose has nothing to decide, so its stops go too.
-  const stops = planned.stops.filter((stop) => !exceptions[stop.module]);
-  files.push(planCaller(read(CALLER), inputs, templates.caller));
+  const callerText = read(CALLER);
+  const stops = settleByCaller(
+    callerText,
+    inputs,
+    planned.stops.filter((stop) => !exceptions[stop.module]),
+  );
+  files.push(planCaller(callerText, inputs, templates.caller));
   files.push(planDependabot(read(DEPENDABOT), ecosystems, templates.dependabot));
   if (inputs.dotnet) {
     if (!paths.includes(PROPS)) {
-      files.push({ path: PROPS, action: "create", content: templates.props });
+      // A fresh repo gets the props file; one already on Ward has a green build
+      // that the file would turn warnings-as-errors on, so that is my call.
+      const detail = `copy templates/${PROPS} when the build is ready for warnings as errors`;
+      if (callerText == null)
+        files.push({ path: PROPS, action: "create", content: templates.props });
+      else files.push({ path: PROPS, action: "ask", detail });
     } else if (lf(templates.props.toString("utf8")) === lf(read(PROPS))) {
       files.push({ path: PROPS, action: "keep" });
     } else {
