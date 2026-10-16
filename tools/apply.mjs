@@ -1,8 +1,9 @@
 // Applies the Ward standard to one repo: the files it carries (the caller,
 // the Dependabot config, Directory.Build.props, the npm scripts the node
 // contract needs) and the settings GitHub holds for it (Dependabot, secret
-// scanning, CodeQL default setup off once the caller's codeql job takes over,
-// the ruleset on the default branch, auto-merge). Every command prints what
+// scanning, merged branches deleted, CodeQL default setup off once the
+// caller's codeql job takes over, the ruleset on the default branch,
+// auto-merge). Every command prints what
 // it would do and changes nothing until --apply. The ward skill in loadout
 // drives it; by hand: node tools/apply.mjs <command>.
 import { spawnSync } from "node:child_process";
@@ -560,8 +561,13 @@ const FOLD = { javascript: "javascript-typescript", typescript: "javascript-type
 // would fail for the same reason, and a silent retry would hide it. job: a
 // caller with the codeql job is visible; languages: what that job will scan.
 // Default setup goes off only when both hold and nothing it scans is lost, so
-// a repo is never left unscanned by accident.
-export function planSettings(baseline, { job = false, languages = [], isPrivate = false } = {}) {
+// a repo is never left unscanned by accident. deleteBranchOnMerge: the repo's
+// own field; only a read false is turned on, so a field missing from the
+// answer is never a blind write.
+export function planSettings(
+  baseline,
+  { job = false, languages = [], isPrivate = false, deleteBranchOnMerge } = {},
+) {
   const { alerts, securityUpdates, analysis, codeScanning } = baseline;
   if ([alerts, securityUpdates, analysis, codeScanning].some((value) => value == null)) {
     const stop = "The token cannot read this repo's settings; it needs admin on the repo.";
@@ -589,6 +595,14 @@ export function planSettings(baseline, { job = false, languages = [], isPrivate 
       method: "PATCH",
       path: "",
       body: { security_and_analysis: { secret_scanning: on, secret_scanning_push_protection: on } },
+    });
+  }
+  if (deleteBranchOnMerge === false) {
+    actions.push({
+      what: "delete merged branches on",
+      method: "PATCH",
+      path: "",
+      body: { delete_branch_on_merge: true },
     });
   }
   if (codeScanning.state === "configured") {
@@ -636,6 +650,7 @@ export function statusLine(state) {
   return [
     `${state.repo}:`,
     `auto-merge=${state.meta.allow_auto_merge}`,
+    `delete-branch=${state.meta.delete_branch_on_merge ?? "unread"}`,
     `secret-scanning=${analysis.secret_scanning?.status ?? "unread"}`,
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
     `default-setup=${state.baseline.codeScanning?.state ?? "unread"}`,
@@ -683,6 +698,7 @@ async function settingsCommand(state, argv, token, stacks) {
     job: view.job,
     languages: languagesFor(view.paths, stacks.ignore),
     isPrivate: state.meta.private === true,
+    deleteBranchOnMerge: state.meta.delete_branch_on_merge,
   });
   const lines = stops.map((stop) => say("stop", stop));
   for (const action of actions) lines.push(say("set", action.what));
