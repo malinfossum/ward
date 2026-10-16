@@ -33,9 +33,9 @@ jobs:
 | dotnet | Restore (a repo's tool manifest first), build with warnings as errors, `dotnet format`, test (a test project is required), EF Core pending-model check with paths from the repo root | `dotnet` (folder or solution file), `dotnet-ef-project` |
 
 The baseline also covers Dependabot with auto-merge for patch and minor updates (GitHub's own actions
-only; third-party actions wait for review), secret scanning with push protection, CodeQL, and a
-ruleset on `main`. The full standard is in
-[the design spec](docs/specs/2026-09-25-ci-standard-design.md).
+only; third-party actions wait for review), secret scanning with push protection, CodeQL on every
+pull request (forks included) through the caller's `codeql` job, and a ruleset on `main`. The full
+standard is in [the design spec](docs/specs/2026-09-25-ci-standard-design.md).
 
 Two more checks live outside `ci.yml`. [`repo-hygiene.yml`](.github/workflows/repo-hygiene.yml) is a
 reusable workflow that checks a repo's public face against its README ([docs](docs/repo-hygiene.md)).
@@ -58,7 +58,7 @@ npm run lint
 
 | Path | What |
 |---|---|
-| `.github/workflows/` | `ci.yml` (entry point), `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` |
+| `.github/workflows/` | `ci.yml` (entry point), `codeql.yml`, `dependabot-automerge.yml`, `repo-hygiene.yml`, the weekly `repo-audit.yml` and `canary.yml`, Ward's own `ward.yml` |
 | `stacks.json` | Which files mean which module, and the dated `exceptions` for modules a repo keeps off on purpose; read by the audit and by the `ward` skill |
 | `docs/` | The spec, the plans, `repo-hygiene.md` and `repo-audit.md` |
 | `tools/` | The scripts each job runs, `watchdog.mjs`, `apply.mjs` (puts a repo on the standard, [docs](docs/apply.md)), and their unit tests |

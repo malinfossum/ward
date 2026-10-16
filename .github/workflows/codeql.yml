@@ -1,0 +1,70 @@
+# CodeQL as a workflow, so a pull request from a fork gets analysed too; default
+# setup never analyses one. A repo calls this from its caller as the codeql job,
+# pinned to a full commit SHA, because analyze holds security-events: write.
+# Every language runs with build-mode none: no build step and no npm hook
+# runs here. C# buildless extraction still runs dotnet restore, so the guard
+# is the fork run's read-only token and the owner's Approve and run.
+name: CodeQL
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  ASTRO_TELEMETRY_DISABLED: "1"
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  languages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      languages: ${{ steps.detect.outputs.languages }}
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Languages in this repo
+        id: detect
+        run: node "$RUNNER_TEMP/ward/tools/codeql-languages.mjs"
+
+  # The category is the one default setup used, so the alerts already open
+  # carry over instead of closing and reopening.
+  analyze:
+    needs: languages
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.languages.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: "/language:${{ matrix.language }}"

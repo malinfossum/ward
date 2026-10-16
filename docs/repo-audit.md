@@ -11,9 +11,9 @@ run emails me.
 
 | Kind | Finding |
 |---|---|
-| `baseline` | Dependabot alerts, Dependabot security updates, secret scanning, push protection or CodeQL default setup is off |
+| `baseline` | Dependabot alerts, Dependabot security updates, secret scanning or push protection is off, or CodeQL default setup is on (GitHub then refuses the uploads of the caller's `codeql` job) |
 | `ruleset` | The default branch has no pull-request rule, does not block force pushes (non-fast-forward) or deletion, does not require code scanning results, or does not require the `ward / gate` check |
-| `caller` | No `.github/workflows/ward.yml`, or it does not call `malinfossum/ward/.github/workflows/ci.yml@v1`, or its automerge job does not pin `dependabot-automerge.yml` to a full Ward commit SHA |
+| `caller` | No `.github/workflows/ward.yml`, or it does not call `malinfossum/ward/.github/workflows/ci.yml@v1`, or its automerge job does not pin `dependabot-automerge.yml` to a full Ward commit SHA, or it has no `codeql` job, or that job does not pin `codeql.yml` to a full Ward commit SHA (Ward itself calls `./.github/workflows/codeql.yml`) |
 | `inputs` | Files of a stack are on `main` but the caller leaves that module off, or an input points at a path that is not there |
 | `suppression` | A `<NuGetAuditSuppress>` without a `YYYY-MM-DD` dated comment beside or above it |
 | `runtime` | A `<TargetFramework>` or the caller's `node-version` within 90 days of end of life, or past it |

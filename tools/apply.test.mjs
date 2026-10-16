@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import {
+  addCodeqlJob,
   CALLER,
   DEPENDABOT,
   mergeRuleset,
@@ -262,6 +263,12 @@ const file = (plan, path) => plan.files.find((f) => f.path === path);
 const caller = (inputs) =>
   renderCaller(templates.caller, { ...OFF, "dotnet-ef-startup-project": "", ...inputs });
 
+// The template's codeql job with the blank line above it: a caller from before
+// v1.4.0 is the template without it.
+const CODEQL_BLOCK = /\n {2}# CodeQL[^\n]*\n {2}codeql:\n(?: {4}[^\n]*\n)+/;
+const AUTOMERGE_BLOCK = /\n {2}automerge:\n(?: {4}[^\n]*\n)+/;
+const crlf = (text) => text.replaceAll("\n", "\r\n");
+
 test("a fresh web repo gets the caller and the Dependabot config; node_modules is invisible", () => {
   const dir = repo({ "package.json": PKG, "src/app.js": "", "node_modules/x/package.json": "{}" });
   const plan = planFiles(dir, { templates });
@@ -295,7 +302,6 @@ test("a C# repo gets Directory.Build.props too; a changed copy is drift, never r
 });
 
 test("a file that differs only in line endings is kept, not drift", () => {
-  const crlf = (text) => text.replaceAll("\n", "\r\n");
   const dir = repo({
     "App.slnx": "",
     "src/App/App.csproj": "<Project />",
@@ -345,6 +351,83 @@ test("a hand-edited caller (a11y in warn, an extra address) is never overwritten
   assert.equal(file(plan, CALLER).action, "keep");
   assert.deepEqual(writeFiles(dir, plan), [DEPENDABOT]);
   assert.equal(readFileSync(join(dir, CALLER), "utf8"), text);
+});
+
+test("a caller without the codeql job gets it before automerge, in its own line endings", () => {
+  const full = caller({ node: "." });
+  const old = full.replace(CODEQL_BLOCK, "");
+  assert.notEqual(old, full, "the template has no codeql block to remove");
+  const dir = repo({ [CALLER]: old, "package.json": PKG });
+  const edit = file(planFiles(dir, { templates }), CALLER);
+  assert.deepEqual([edit.action, edit.detail], ["edit", "add the codeql job"]);
+  assert.equal(edit.content, full);
+  writeFileSync(join(dir, CALLER), crlf(old));
+  assert.equal(file(planFiles(dir, { templates }), CALLER).content, crlf(full));
+});
+
+test("a caller without automerge gets the codeql job at the end, and a hand edit survives", () => {
+  const full = caller({ node: "." })
+    .replace(AUTOMERGE_BLOCK, "")
+    .replace('a11y: "off"', 'a11y: "warn"');
+  const old = full.replace(CODEQL_BLOCK, "");
+  const dir = repo({ [CALLER]: old, "package.json": PKG });
+  const plan = planFiles(dir, { templates });
+  assert.equal(file(plan, CALLER).content, full);
+  assert.deepEqual(writeFiles(dir, plan), [CALLER, DEPENDABOT]);
+  assert.equal(readFileSync(join(dir, CALLER), "utf8"), full);
+  assert.equal(file(planFiles(dir, { templates }), CALLER).action, "keep");
+});
+
+test("input drift plus a missing codeql job stays drift; an unpinned codeql job is drift", () => {
+  const dir = repo({
+    [CALLER]: caller({ node: "." }).replace(CODEQL_BLOCK, ""),
+    "web/package.json": PKG,
+  });
+  const drift = file(planFiles(dir, { templates }), CALLER);
+  assert.equal(drift.action, "drift");
+  assert.equal(drift.detail, 'node is ".", the files say "web"; no codeql job');
+  const floating = caller({ node: "." }).replace(/codeql\.yml@[0-9a-f]{40}/, "codeql.yml@v1");
+  const pinless = repo({ [CALLER]: floating, "package.json": PKG });
+  const unpinned = file(planFiles(pinless, { templates }), CALLER);
+  assert.equal(unpinned.action, "drift");
+  assert.equal(
+    unpinned.detail,
+    "the codeql job uses malinfossum/ward/.github/workflows/codeql.yml@v1, not a full commit SHA",
+  );
+});
+
+test("a codeql job that calls something else is drift, never a second codeql key", () => {
+  const foreign = caller({ node: "." }).replace(
+    /uses: malinfossum\/ward\/\.github\/workflows\/codeql\.yml@\S+/,
+    "uses: github/codeql-action/analyze@v3",
+  );
+  assert.equal(addCodeqlJob(foreign, templates.caller), null);
+  const commented = foreign.replace("  codeql:", "  codeql: # scan");
+  assert.equal(addCodeqlJob(commented, templates.caller), null);
+  const quoted = foreign.replace("  codeql:", '  "codeql":');
+  assert.equal(addCodeqlJob(quoted, templates.caller), null);
+  const dir = repo({ [CALLER]: foreign, "package.json": PKG });
+  const plan = planFiles(dir, { templates });
+  const drift = file(plan, CALLER);
+  assert.equal(drift.action, "drift");
+  assert.equal(
+    drift.detail,
+    "a codeql job exists but does not call malinfossum/ward/.github/workflows/codeql.yml; fix it by hand",
+  );
+  assert.equal(drift.content, undefined);
+  writeFiles(dir, plan);
+  assert.equal(readFileSync(join(dir, CALLER), "utf8"), foreign);
+});
+
+test("a caller whose jobs are not indented two spaces is drift, never a broken edit", () => {
+  const four = caller({ node: "." }).replace(CODEQL_BLOCK, "").replace(/^( +)/gm, "$1$1");
+  const dir = repo({ [CALLER]: four, "package.json": PKG });
+  const plan = file(planFiles(dir, { templates }), CALLER);
+  assert.equal(plan.action, "drift");
+  assert.equal(
+    plan.detail,
+    "jobs are not indented two spaces; add the codeql job from templates/ward.yml by hand",
+  );
 });
 
 test("writeFiles refuses a file that appeared after the plan was made", () => {
@@ -608,6 +691,7 @@ const WRITES = [
 ];
 const bareRoutes = (overrides = []) => [...overrides, ...READS, ...WRITES];
 const ENV = { GITHUB_TOKEN: "t" };
+const b64 = (text) => Buffer.from(text).toString("base64");
 
 test("request sends a JSON body with the method and the token", async () => {
   const stub = stubFetch([[/./, 200, { ok: true }]]);
@@ -625,7 +709,7 @@ test("request sends a JSON body with the method and the token", async () => {
   }
 });
 
-test("settings: plans the four changes a bare repo needs and makes them only with --apply", async () => {
+test("settings: plans the three changes a bare repo needs and makes them only with --apply", async () => {
   const stub = stubFetch(bareRoutes());
   try {
     const dry = await runApply(["settings", "malinfossum/x"], ENV);
@@ -636,7 +720,6 @@ test("settings: plans the four changes a bare repo needs and makes them only wit
         "Dependabot alerts on",
         "Dependabot security updates on",
         "secret scanning and push protection on",
-        "CodeQL default setup on",
       ],
     );
     assert.deepEqual(stub.writes(), []);
@@ -645,14 +728,12 @@ test("settings: plans the four changes a bare repo needs and makes them only wit
       ["PUT", "/repos/malinfossum/x/vulnerability-alerts"],
       ["PUT", "/repos/malinfossum/x/automated-security-fixes"],
       ["PATCH", "/repos/malinfossum/x"],
-      ["PATCH", "/repos/malinfossum/x/code-scanning/default-setup"],
     ]);
     const patches = stub.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
     assert.deepEqual(patches[0], {
       security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
     });
-    assert.deepEqual(patches[1], { state: "configured", query_suite: "default" });
-    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 4);
+    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 3);
     assert.ok(stub.calls.every((c) => c.auth === "Bearer t"));
   } finally {
     stub.restore();
@@ -669,7 +750,11 @@ test("settings: everything on is kept; a setting the token cannot read is a stop
       [/^\/repos\/malinfossum\/x$/, 200, onMeta],
       [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
       [/\/vulnerability-alerts$/, 204],
-      [/\/code-scanning\/default-setup$/, 200, { state: "configured", languages: ["javascript"] }],
+      [
+        /\/code-scanning\/default-setup$/,
+        200,
+        { state: "not-configured", languages: ["javascript"] },
+      ],
     ]),
   );
   try {
@@ -727,7 +812,6 @@ test("settings: a refused write (403) is an error, not done, and stops the rest"
         "set     Dependabot alerts on",
         "set     Dependabot security updates on",
         "set     secret scanning and push protection on",
-        "set     CodeQL default setup on",
         "done    Dependabot alerts on",
         "error   Dependabot security updates on 403",
       ],
@@ -759,18 +843,6 @@ test("request returns the status of a write, and null for an empty body", async 
   }
 });
 
-test("settings: a repo with no CodeQL language gets a note instead of a CodeQL action", () => {
-  const baseline = {
-    alerts: true,
-    securityUpdates: { enabled: true, paused: false },
-    analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
-    codeScanning: { state: "not-configured", languages: [] },
-  };
-  const plan = planSettings(baseline);
-  assert.deepEqual(plan.actions, []);
-  assert.match(plan.notes[0], /CodeQL has no language to analyse here/);
-});
-
 test("settings and status without a token or with a bad repo name are a stop", async () => {
   const noToken = await runApply(["settings", "malinfossum/x"], {});
   assert.equal(noToken.exitCode, 1);
@@ -778,6 +850,273 @@ test("settings and status without a token or with a bad repo name are a stop", a
   const badName = await runApply(["status", "x"], ENV);
   assert.equal(badName.exitCode, 1);
   assert.ok(badName.lines[0].startsWith("usage"));
+});
+
+// Everything but CodeQL already on, so the CodeQL line is the only decision left.
+const SET_ON = {
+  ...META,
+  security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
+};
+const settled = (overrides) =>
+  bareRoutes([
+    ...overrides,
+    [/^\/repos\/malinfossum\/x$/, 200, SET_ON, "GET"],
+    [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }, "GET"],
+    [/\/vulnerability-alerts$/, 204, undefined, "GET"],
+  ]);
+const defaultSetupOn = (languages) => [
+  /\/code-scanning\/default-setup$/,
+  200,
+  { state: "configured", languages },
+  "GET",
+];
+const treeOf = (paths) => [
+  /\/git\/trees\/main/,
+  200,
+  { truncated: false, tree: paths.map((path) => ({ type: "blob", path })) },
+  "GET",
+];
+const onBranch = (text) => [
+  /\/contents\/\.github\/workflows\/ward\.yml$/,
+  200,
+  { content: b64(text) },
+  "GET",
+];
+const WITH_JOB = caller({ node: "." });
+const WITHOUT_JOB = WITH_JOB.replace(CODEQL_BLOCK, "");
+
+// A checkout of a repo with its files staged, as files --apply leaves it.
+function checkout(files, origin) {
+  const dir = repo(files);
+  const git = (...args) => spawnSync("git", ["-C", dir, ...args]);
+  git("init", "-q");
+  if (origin) git("remote", "add", "origin", origin);
+  git("add", ".");
+  return dir;
+}
+
+test("settings: default setup goes off when the default branch's caller has the codeql job", async () => {
+  const stub = stubFetch(
+    settled([
+      defaultSetupOn(["actions", "javascript", "typescript"]),
+      treeOf([CALLER, "src/app.ts"]),
+      onBranch(WITH_JOB),
+    ]),
+  );
+  try {
+    const dry = await runApply(["settings", "malinfossum/x"], ENV);
+    assert.equal(dry.exitCode, 0);
+    assert.deepEqual(
+      dry.lines.filter((l) => /^(set|stop)/.test(l)),
+      ["set     CodeQL default setup off"],
+    );
+    assert.ok(
+      dry.lines.includes(
+        "note    GitHub turns default setup off in the background: push only once status reads default-setup=not-configured.",
+      ),
+    );
+    assert.deepEqual(stub.writes(), []);
+    const wet = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(wet.exitCode, 0);
+    assert.deepEqual(stub.writes(), [
+      ["PATCH", "/repos/malinfossum/x/code-scanning/default-setup"],
+    ]);
+    assert.deepEqual(stub.calls.at(-1).body, { state: "not-configured" });
+    assert.ok(wet.lines.includes("done    CodeQL default setup off"));
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: default setup stays on, with a note, while no caller has the codeql job", async () => {
+  const stub = stubFetch(
+    settled([defaultSetupOn(["actions"]), treeOf([CALLER]), onBranch(WITHOUT_JOB)]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(out.exitCode, 0);
+    assert.ok(
+      out.lines.includes(
+        "note    CodeQL default setup stays on until the caller has the codeql job; run files --apply, then settings --dir <checkout>.",
+      ),
+    );
+    assert.ok(!out.lines.some((l) => l.startsWith("set")));
+    assert.ok(!out.lines.some((l) => l.startsWith("keep")));
+    assert.deepEqual(stub.writes(), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+// The codeql job's ref is the part that decides whether Ward's scan will run.
+const withRef = (ref) =>
+  WITH_JOB.replace(/uses: malinfossum\/ward\/\.github\/workflows\/codeql\.yml@\S+/, `uses: ${ref}`);
+
+for (const [what, ref] of [
+  ["a local path on a repo that is not Ward", "./.github/workflows/codeql.yml"],
+  ["a foreign workflow", `other/repo/.github/workflows/codeql.yml@${"a".repeat(40)}`],
+]) {
+  test(`settings: default setup stays on when the codeql job is ${what}`, async () => {
+    const stub = stubFetch(
+      settled([defaultSetupOn(["actions"]), treeOf([CALLER]), onBranch(withRef(ref))]),
+    );
+    try {
+      const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+      assert.equal(out.exitCode, 0);
+      assert.ok(
+        out.lines.includes(
+          "note    CodeQL default setup stays on until the caller has the codeql job; run files --apply, then settings --dir <checkout>.",
+        ),
+      );
+      assert.ok(!out.lines.some((l) => l.startsWith("set")));
+      assert.deepEqual(stub.writes(), []);
+    } finally {
+      stub.restore();
+    }
+  });
+}
+
+test("settings: on Ward itself the local codeql path counts as the job", async () => {
+  const stub = stubFetch(
+    settled([
+      [/^\/repos\/malinfossum\/ward$/, 200, { ...SET_ON, full_name: "malinfossum/ward" }, "GET"],
+      defaultSetupOn(["actions", "javascript"]),
+      treeOf([CALLER, "src/app.js"]),
+      onBranch(withRef("./.github/workflows/codeql.yml")),
+    ]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/ward"], ENV);
+    assert.equal(out.exitCode, 0);
+    assert.ok(out.lines.includes("set     CodeQL default setup off"));
+    assert.deepEqual(stub.writes(), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: --dir shows the job from a checkout of the same repo before it is merged", async () => {
+  const dir = checkout(
+    { [CALLER]: WITH_JOB, "src/app.ts": "" },
+    "https://github.com/MalinFossum/X.git",
+  );
+  const stub = stubFetch(
+    settled([defaultSetupOn(["actions", "typescript"]), treeOf([CALLER]), onBranch(WITHOUT_JOB)]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--dir", dir, "--apply"], ENV);
+    assert.equal(out.exitCode, 0);
+    assert.ok(out.lines.includes("set     CodeQL default setup off"));
+    assert.deepEqual(stub.writes(), [
+      ["PATCH", "/repos/malinfossum/x/code-scanning/default-setup"],
+    ]);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: a --dir that is not a checkout of the repo is a stop, and nothing is written", async () => {
+  const other = checkout({ [CALLER]: WITH_JOB }, "git@github.com:malinfossum/ward.git");
+  const none = checkout({ [CALLER]: WITH_JOB }, "");
+  const stub = stubFetch(
+    settled([defaultSetupOn(["actions"]), treeOf([CALLER]), onBranch(WITHOUT_JOB)]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--dir", other, "--apply"], ENV);
+    assert.equal(out.exitCode, 1);
+    assert.deepEqual(out.lines, [
+      `stop    ${other} is a checkout of malinfossum/ward, not malinfossum/x.`,
+    ]);
+    const bare = await runApply(["settings", "malinfossum/x", "--dir", none, "--apply"], ENV);
+    assert.equal(bare.exitCode, 1);
+    assert.match(
+      bare.lines[0],
+      /^stop {4}.* is a checkout of no GitHub repo, not malinfossum\/x\.$/,
+    );
+    const missing = await runApply(["settings", "malinfossum/x", "--dir"], ENV);
+    assert.equal(missing.exitCode, 1);
+    assert.deepEqual(missing.lines, ["stop    --dir is not a directory I can read."]);
+    assert.deepEqual(stub.writes(), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("settings: a language default setup scans and the codeql job would not is a stop", async () => {
+  const stub = stubFetch(
+    settled([
+      defaultSetupOn(["actions", "c-cpp"]),
+      treeOf([CALLER, "include/lib.h", "vendor/x.min.js"]),
+      onBranch(WITH_JOB),
+    ]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(out.exitCode, 1);
+    assert.ok(
+      out.lines.includes(
+        "stop    CodeQL default setup scans c-cpp, which the codeql job would not; add it to tools/codeql-languages.mjs first.",
+      ),
+    );
+    assert.deepEqual(stub.writes(), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+const SETTLED = {
+  alerts: true,
+  securityUpdates: { enabled: true, paused: false },
+  analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
+};
+
+test("planSettings: javascript and typescript fold into one; a language outside the table stops", () => {
+  const on = (languages) => ({ ...SETTLED, codeScanning: { state: "configured", languages } });
+  const folded = planSettings(on(["javascript", "typescript", "actions"]), {
+    job: true,
+    languages: ["actions", "javascript-typescript"],
+  });
+  assert.deepEqual(folded.stops, []);
+  assert.deepEqual(folded.actions, [
+    {
+      what: "CodeQL default setup off",
+      method: "PATCH",
+      path: "/code-scanning/default-setup",
+      body: { state: "not-configured" },
+    },
+  ]);
+  const go = planSettings(on(["actions", "go"]), { job: true, languages: ["actions"] });
+  assert.deepEqual(go.actions, []);
+  assert.deepEqual(go.stops, [
+    "CodeQL default setup scans go, which the codeql job would not; add it to tools/codeql-languages.mjs first.",
+  ]);
+  const off = { ...SETTLED, codeScanning: { state: "not-configured", languages: [] } };
+  assert.deepEqual(planSettings(off, { job: false, languages: ["actions"] }), {
+    stops: [],
+    actions: [],
+    notes: [],
+  });
+});
+
+test("planSettings: default setup that does not list its languages is a stop, never a blind off", () => {
+  const plan = planSettings(
+    { ...SETTLED, codeScanning: { state: "configured" } },
+    { job: true, languages: ["actions"] },
+  );
+  assert.deepEqual(plan.actions, []);
+  assert.deepEqual(plan.stops, [
+    "CodeQL default setup does not say which languages it scans, so I cannot check the codeql job covers them.",
+  ]);
+});
+
+test("planSettings: a private repo gets a note to leave the codeql job out", () => {
+  const plan = planSettings(
+    { ...SETTLED, codeScanning: { state: "not-configured", languages: [] } },
+    { isPrivate: true },
+  );
+  assert.deepEqual(plan.notes, [
+    "This repo is private: CodeQL here needs GitHub Advanced Security, so leave the codeql job out of its caller.",
+  ]);
 });
 
 test("status prints one line with the state, and readState sees classic protection and open Dependabot PRs", async () => {
@@ -802,7 +1141,7 @@ test("status prints one line with the state, and readState sees classic protecti
     assert.equal(state.analysed, false);
     assert.equal(
       statusLine(state),
-      "malinfossum/x: auto-merge=false secret-scanning=disabled push-protection=disabled codeql=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
+      "malinfossum/x: auto-merge=false secret-scanning=disabled push-protection=disabled default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
     );
     const { lines } = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(lines[0], `status  ${statusLine(state)}`);
@@ -1104,6 +1443,9 @@ test("docs/apply.md documents every command and every output word", () => {
   ];
   for (const word of words)
     assert.match(doc, new RegExp(`^\\| \`${word}\``, "m"), `${word} has no row`);
+  assert.match(doc, /^\| `settings <owner\/repo> \[--dir <checkout>\]`/m);
+  assert.match(doc, /default-setup=not-configured/);
+  assert.match(doc, /`codeql` job/);
   assert.match(doc, /--apply/);
   assert.match(doc, /gh auth token/);
 });

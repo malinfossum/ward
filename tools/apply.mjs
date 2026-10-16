@@ -1,9 +1,10 @@
 // Applies the Ward standard to one repo: the files it carries (the caller,
 // the Dependabot config, Directory.Build.props, the npm scripts the node
 // contract needs) and the settings GitHub holds for it (Dependabot, secret
-// scanning, CodeQL, the ruleset on the default branch, auto-merge). Every
-// command prints what it would do and changes nothing until --apply. The
-// ward skill in loadout drives it; by hand: node tools/apply.mjs <command>.
+// scanning, CodeQL default setup off once the caller's codeql job takes over,
+// the ruleset on the default branch, auto-merge). Every command prints what
+// it would do and changes nothing until --apply. The ward skill in loadout
+// drives it; by hand: node tools/apply.mjs <command>.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -16,13 +17,18 @@ import {
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
+import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
 import { planSteps } from "./node-contract.mjs";
 import {
+  CODEQL_PINNED,
   exceptionsFor,
   fetchRepoData,
+  indentOf,
   parseCaller,
   REQUIRED_CHECK,
   request,
+  SELF_CODEQL,
+  WARD,
 } from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
 
@@ -263,6 +269,48 @@ export function withScripts(text, add) {
 // A Windows checkout may hold CRLF where the template holds LF; that is not drift.
 const lf = (text) => text.replaceAll("\r\n", "\n");
 
+// A job named codeql, whatever it calls, quoted or with a comment after the key too.
+const hasCodeqlKey = (text) =>
+  lf(text)
+    .split("\n")
+    .some((line) => /^ {2}["']?codeql["']?:\s*(#.*)?$/.test(line));
+
+// The template's codeql job, with the comment lines directly above it.
+function codeqlBlock(template) {
+  const lines = lf(template).split("\n");
+  const at = lines.findIndex((line) => /^ {2}codeql:\s*$/.test(line));
+  let first = at;
+  while (first > 0 && /^ {2}#/.test(lines[first - 1])) first--;
+  let last = at;
+  while (last + 1 < lines.length && lines[last + 1].trim() !== "") last++;
+  return lines.slice(first, last + 1);
+}
+
+// A caller from before v1.4.0 with the template's codeql job added: before the
+// automerge job and the comments above it, or at the end when there is none.
+// Nothing else changes, and a CRLF file stays CRLF. null when the jobs are not
+// indented two spaces like the template's, because the block would break the YAML,
+// or when a codeql job already exists, because a second key would break it too.
+export function addCodeqlJob(text, template) {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = lf(text).split("\n");
+  if (hasCodeqlKey(text)) return null;
+  const jobsAt = lines.findIndex((line) => /^jobs:\s*$/.test(line));
+  if (jobsAt === -1) return null;
+  const firstJob = lines.slice(jobsAt + 1).find((line) => line.trim() && !/^\s*#/.test(line));
+  if (!firstJob || indentOf(firstJob) !== 2) return null;
+  const block = codeqlBlock(template);
+  let at = lines.findIndex((line) => /^ {2}automerge:\s*$/.test(line));
+  if (at === -1) {
+    while (lines.length && lines.at(-1).trim() === "") lines.pop();
+    lines.push("", ...block, "");
+  } else {
+    while (at > 0 && /^ {2}#/.test(lines[at - 1])) at--;
+    lines.splice(at, 0, ...block, "");
+  }
+  return lines.join(eol);
+}
+
 // `./web`, `web` and `web/` are one directory; `./` alone is the root.
 const bare = (value) => (value ?? "").replace(/^\.\//, "").replace(/\/$/, "") || ".";
 const sameDir = (a, b) => bare(a.replace(/^\//, "")) === bare(b.replace(/^\//, ""));
@@ -277,7 +325,9 @@ function sameInput(key, current, planned) {
 }
 
 // An input the caller leaves out counts as "", so a caller written before an
-// input existed is kept while the files say "".
+// input existed is kept while the files say "". A caller from before v1.4.0
+// gets the codeql job as an edit, unless its inputs drift: then I settle the
+// whole file by hand, and the detail names the missing job too.
 function planCaller(text, inputs, template) {
   if (text == null)
     return { path: CALLER, action: "create", content: renderCaller(template, inputs) };
@@ -292,6 +342,26 @@ function planCaller(text, inputs, template) {
       (key) =>
         `${key} is "${current.inputs[key] ?? DEFAULTS[key]}", the files say "${inputs[key]}"`,
     );
+  if (!current.codeql) {
+    if (hasCodeqlKey(text)) {
+      const detail =
+        "a codeql job exists but does not call malinfossum/ward/.github/workflows/codeql.yml; fix it by hand";
+      return { path: CALLER, action: "drift", detail };
+    }
+    if (drift.length) {
+      return { path: CALLER, action: "drift", detail: `${drift.join("; ")}; no codeql job` };
+    }
+    const content = addCodeqlJob(text, template);
+    if (content == null) {
+      const detail =
+        "jobs are not indented two spaces; add the codeql job from templates/ward.yml by hand";
+      return { path: CALLER, action: "drift", detail };
+    }
+    return { path: CALLER, action: "edit", detail: "add the codeql job", content };
+  }
+  if (!CODEQL_PINNED.test(current.codeql)) {
+    drift.push(`the codeql job uses ${current.codeql}, not a full commit SHA`);
+  }
   if (drift.length) return { path: CALLER, action: "drift", detail: drift.join("; ") };
   return { path: CALLER, action: "keep" };
 }
@@ -397,7 +467,8 @@ export function planFiles(
 
 // Writes the create and edit actions under dir; returns the paths written. A
 // create uses the wx flag, so a file that exists is never overwritten even if
-// it appeared after the plan was made. An edit changes package.json scripts.
+// it appeared after the plan was made. An edit changes package.json scripts or
+// adds the caller's codeql job.
 // written fills as it goes, so a caller still has the paths done before a throw.
 export function writeFiles(dir, plan, written = []) {
   for (const file of plan.files) {
@@ -431,6 +502,10 @@ export async function readState(repo, token) {
     meta,
     branch: meta.default_branch,
     baseline: data.baseline,
+    // The default branch's files and caller: where settings looks for the codeql
+    // job and the languages it will scan when no --dir is given.
+    tree: data.tree,
+    caller: data.caller,
     classic,
     // Classic protection reads 401 or 403 without admin, which would pass for "none":
     // a token that cannot read it cannot be trusted with a ruleset either.
@@ -442,15 +517,22 @@ export async function readState(repo, token) {
   };
 }
 
+// Default setup names JavaScript and TypeScript apart; the workflow scans them as one.
+const FOLD = { javascript: "javascript-typescript", typescript: "javascript-typescript" };
+
 // The settings a repo still needs, from the baseline the audit reads. A
 // field the token could not read is a stop, never a blind write: the write
-// would fail for the same reason, and a silent retry would hide it.
-export function planSettings(baseline) {
+// would fail for the same reason, and a silent retry would hide it. job: a
+// caller with the codeql job is visible; languages: what that job will scan.
+// Default setup goes off only when both hold and nothing it scans is lost, so
+// a repo is never left unscanned by accident.
+export function planSettings(baseline, { job = false, languages = [], isPrivate = false } = {}) {
   const { alerts, securityUpdates, analysis, codeScanning } = baseline;
   if ([alerts, securityUpdates, analysis, codeScanning].some((value) => value == null)) {
     const stop = "The token cannot read this repo's settings; it needs admin on the repo.";
     return { stops: [stop], actions: [], notes: [] };
   }
+  const stops = [];
   const actions = [];
   const notes = [];
   if (!alerts)
@@ -474,23 +556,42 @@ export function planSettings(baseline) {
       body: { security_and_analysis: { secret_scanning: on, secret_scanning_push_protection: on } },
     });
   }
-  if (codeScanning.state !== "configured") {
-    // Same rule as checkBaseline: no languages means CodeQL cannot be turned on here.
-    const analysable = codeScanning.languages ? codeScanning.languages.length > 0 : true;
-    if (analysable) {
-      actions.push({
-        what: "CodeQL default setup on",
-        method: "PATCH",
-        path: "/code-scanning/default-setup",
-        body: { state: "configured", query_suite: "default" },
-      });
-    } else {
+  if (codeScanning.state === "configured") {
+    if (!job) {
       notes.push(
-        "CodeQL has no language to analyse here; the ruleset needs --no-codeql and a dated ruleset exception in stacks.json.",
+        "CodeQL default setup stays on until the caller has the codeql job; run files --apply, then settings --dir <checkout>.",
       );
+    } else if (!Array.isArray(codeScanning.languages)) {
+      stops.push(
+        "CodeQL default setup does not say which languages it scans, so I cannot check the codeql job covers them.",
+      );
+    } else {
+      const scanned = [...new Set(codeScanning.languages.map((name) => FOLD[name] ?? name))];
+      const lost = scanned.filter((name) => !languages.includes(name));
+      if (lost.length) {
+        stops.push(
+          `CodeQL default setup scans ${lost.join(", ")}, which the codeql job would not; add it to tools/codeql-languages.mjs first.`,
+        );
+      } else {
+        actions.push({
+          what: "CodeQL default setup off",
+          method: "PATCH",
+          path: "/code-scanning/default-setup",
+          body: { state: "not-configured" },
+        });
+        // The PATCH answers 202 and finishes later; an upload before then is refused.
+        notes.push(
+          "GitHub turns default setup off in the background: push only once status reads default-setup=not-configured.",
+        );
+      }
     }
   }
-  return { stops: [], actions, notes };
+  if (isPrivate) {
+    notes.push(
+      "This repo is private: CodeQL here needs GitHub Advanced Security, so leave the codeql job out of its caller.",
+    );
+  }
+  return { stops, actions, notes };
 }
 
 export function statusLine(state) {
@@ -502,20 +603,57 @@ export function statusLine(state) {
     `auto-merge=${state.meta.allow_auto_merge}`,
     `secret-scanning=${analysis.secret_scanning?.status ?? "unread"}`,
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
-    `codeql=${state.baseline.codeScanning?.state ?? "unread"}`,
+    `default-setup=${state.baseline.codeScanning?.state ?? "unread"}`,
     `analysed=${state.analysed}`,
     `rulesets=${state.rulesetsRead ? state.rulesets.length : "unread"}${state.classic ? "+classic" : ""}`,
     `rules=${rules ? types.join(",") || "none" : "unread"}`,
   ].join(" ");
 }
 
-async function settingsCommand(state, argv, token) {
-  const { stops, actions, notes } = planSettings(state.baseline);
+// Only Ward's own codeql workflow counts as the job. A local path means Ward's
+// scan only on Ward itself; on any other repo it points at a file that is not
+// there, and a foreign workflow is not mine, so settings must keep default setup on.
+// Any ref passes: the audit flags an unpinned one separately.
+const WARD_CODEQL = /^malinfossum\/ward\/\.github\/workflows\/codeql\.yml@.+$/;
+const hasCodeqlJob = (text, self) => {
+  const ref = text == null ? null : parseCaller(lf(text))?.codeql;
+  return Boolean(ref && (WARD_CODEQL.test(ref) || (self && ref === SELF_CODEQL)));
+};
+
+// Where settings can see the codeql job, and the tree that job will scan: the
+// default branch, or a --dir checkout of this same repo, whose caller may have
+// the job before it is merged. --dir has no default: run from a Ward clone, `.`
+// would read Ward's own caller and pass for any repo.
+function codeqlView(state, argv) {
+  const self = state.repo.toLowerCase() === WARD;
+  const onBranch = hasCodeqlJob(state.caller, self);
+  if (!argv.includes("--dir")) return { job: onBranch, paths: state.tree };
+  const dir = arg(argv, "--dir");
+  if (!dir || !existsSync(dir)) {
+    return { stop: `${dir || "--dir"} is not a directory I can read.` };
+  }
+  const origin = repoName([], dir);
+  if (origin.toLowerCase() !== state.repo.toLowerCase()) {
+    return { stop: `${dir} is a checkout of ${origin || "no GitHub repo"}, not ${state.repo}.` };
+  }
+  const local = join(dir, CALLER);
+  const text = existsSync(local) ? readFileSync(local, "utf8") : null;
+  return { job: onBranch || hasCodeqlJob(text, self), paths: trackedFiles(dir) ?? [] };
+}
+
+async function settingsCommand(state, argv, token, stacks) {
+  const view = codeqlView(state, argv);
+  if (view.stop) return { lines: [say("stop", view.stop)], exitCode: 1 };
+  const { stops, actions, notes } = planSettings(state.baseline, {
+    job: view.job,
+    languages: languagesFor(view.paths, stacks.ignore),
+    isPrivate: state.meta.private === true,
+  });
   const lines = stops.map((stop) => say("stop", stop));
   for (const action of actions) lines.push(say("set", action.what));
   for (const note of notes) lines.push(say("note", note));
   if (stops.length) return { lines, exitCode: 1 };
-  if (!actions.length) lines.push(say("keep", "every setting is already on"));
+  if (!actions.length && !notes.length) lines.push(say("keep", "every setting is already on"));
   if (argv.includes("--apply")) {
     for (const action of actions) {
       const call = () =>
@@ -603,7 +741,8 @@ function filesCommand(argv, { stacks, templates }) {
 
 export const USAGE = [
   "node tools/apply.mjs files [--dir <repo>] [--repo <owner/name>] [--apply]",
-  "node tools/apply.mjs settings|ruleset|automerge|status <owner/repo> [--apply] [--bypass-admin] [--no-codeql]",
+  "node tools/apply.mjs settings <owner/repo> [--dir <checkout>] [--apply]",
+  "node tools/apply.mjs ruleset|automerge|status <owner/repo> [--apply] [--bypass-admin] [--no-codeql]",
   "Settings commands read GITHUB_TOKEN (locally: GITHUB_TOKEN=$(gh auth token)).",
 ].join("\n");
 
@@ -765,7 +904,7 @@ export async function runApply(argv, env, deps = {}) {
   try {
     const state = await readState(rest[0], token);
     if (command === "status") return { lines: [say("status", statusLine(state))], exitCode: 0 };
-    if (command === "settings") return await settingsCommand(state, rest, token);
+    if (command === "settings") return await settingsCommand(state, rest, token, stacks);
     if (command === "ruleset") return await rulesetCommand(state, rest, token, templates.ruleset);
     return await automergeCommand(state, rest, token);
   } catch (error) {
