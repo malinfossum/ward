@@ -118,6 +118,22 @@ test("two EF projects, or two Design projects, are a stop", () => {
   assert.match(twoDesign.stops[0].text, /More than one project referencing/);
 });
 
+test("a stop names the inputs it leaves unset, the tied one first", () => {
+  const paths = ["App.slnx", "src/A/A.csproj", "src/B/B.csproj"];
+  assert.deepEqual(plan(["web/package.json", "api/package.json"]).stops[0].inputs, ["node"]);
+  assert.deepEqual(plan(["A.slnx", "B.slnx", "src/A/A.csproj"]).stops[0].inputs, ["dotnet"]);
+  const twoEf = plan(paths, { "src/A/A.csproj": SQLITE, "src/B/B.csproj": SQLITE });
+  assert.deepEqual(twoEf.stops[0].inputs, ["dotnet-ef-project", "dotnet-ef-startup-project"]);
+  const twoDesign = plan(paths, { "src/A/A.csproj": DESIGN, "src/B/B.csproj": DESIGN });
+  assert.deepEqual(twoDesign.stops[0].inputs, ["dotnet-ef-project", "dotnet-ef-startup-project"]);
+  const efAndTwoDesign = plan(["App.slnx", "src/A/A.csproj", "src/B/B.csproj", "src/C/C.csproj"], {
+    "src/A/A.csproj": SQLITE,
+    "src/B/B.csproj": DESIGN,
+    "src/C/C.csproj": DESIGN,
+  });
+  assert.deepEqual(efAndTwoDesign.stops[0].inputs, ["dotnet-ef-startup-project"]);
+});
+
 test("files under node_modules, bin and obj never count", () => {
   const { inputs } = plan(["node_modules/x/package.json", "bin/Debug/App.csproj", "README.md"]);
   assert.deepEqual(inputs, {
@@ -428,6 +444,74 @@ test("a caller whose jobs are not indented two spaces is drift, never a broken e
     plan.detail,
     "jobs are not indented two spaces; add the codeql job from templates/ward.yml by hand",
   );
+});
+
+// Hugin, as the v1.4.0 migration found it: a caller from before the codeql
+// job and before the startup input, two projects referencing EF Core at the
+// same depth, and no Directory.Build.props.
+const HUGIN = {
+  "Hugin.slnx": "",
+  "Hugin.Infrastructure/Hugin.Infrastructure.csproj": `<Project>${SQLITE}</Project>`,
+  "Hugin.Tests/Hugin.Tests.csproj": `<Project>${SQLITE}</Project>`,
+};
+const huginCaller = (ef) =>
+  caller({ dotnet: "Hugin.slnx", "dotnet-ef-project": ef })
+    .replace(CODEQL_BLOCK, "")
+    .replace(/^ {6}dotnet-ef-startup-project:.*\n/m, "");
+
+test("a tie for an input the caller already sets is not a stop: the value is kept, the codeql job is the only edit", async () => {
+  const dir = repo({ ...HUGIN, [CALLER]: huginCaller("") });
+  const plan = planFiles(dir, { templates });
+  assert.deepEqual(plan.stops, []);
+  assert.equal(plan.inputs["dotnet-ef-project"], "");
+  assert.equal(plan.inputs["dotnet-ef-startup-project"], "");
+  const edit = file(plan, CALLER);
+  assert.deepEqual([edit.action, edit.detail], ["edit", "add the codeql job"]);
+  assert.equal(
+    edit.content,
+    huginCaller("").replace(AUTOMERGE_BLOCK, (block) => {
+      const full = caller({ dotnet: "Hugin.slnx" });
+      return full.slice(full.search(CODEQL_BLOCK), full.search(AUTOMERGE_BLOCK)) + block;
+    }),
+  );
+  // Directory.Build.props is still planned: a caller-only run discards it or accepts it.
+  assert.deepEqual(actions(plan), [
+    [CALLER, "edit"],
+    [DEPENDABOT, "create"],
+    [PROPS, "create"],
+  ]);
+  const run = await runApply(["files", "--dir", dir], {}, { templates });
+  assert.equal(run.exitCode, 0);
+  assert.ok(run.lines.includes(`edit    ${CALLER}: add the codeql job`));
+  assert.ok(run.lines.includes(`create  ${PROPS}`));
+  assert.ok(!run.lines.some((l) => l.startsWith("stop")));
+});
+
+test("a settled input keeps the caller's own value, and the caller is kept once it has the codeql job", () => {
+  const dir = repo({ ...HUGIN, [CALLER]: huginCaller("Hugin.Infrastructure") });
+  const plan = planFiles(dir, { templates });
+  assert.deepEqual(plan.stops, []);
+  assert.equal(plan.inputs["dotnet-ef-project"], "Hugin.Infrastructure");
+  assert.equal(file(plan, CALLER).action, "edit");
+  const done = repo({
+    ...HUGIN,
+    [CALLER]: caller({ dotnet: "Hugin.slnx", "dotnet-ef-project": "Hugin.Infrastructure" }),
+  });
+  assert.deepEqual(planFiles(done, { templates }).stops, []);
+  assert.equal(file(planFiles(done, { templates }), CALLER).action, "keep");
+});
+
+test("a tie for an input the caller does not mention, or a caller that does not parse, stays a stop", async () => {
+  const silent = huginCaller("").replace(/^ {6}dotnet-ef-project:.*\n/m, "");
+  const dir = repo({ ...HUGIN, [CALLER]: silent });
+  const plan = planFiles(dir, { templates });
+  assert.equal(plan.stops.length, 1);
+  assert.equal(plan.stops[0].inputs[0], "dotnet-ef-project");
+  const run = await runApply(["files", "--dir", dir, "--apply"], {}, { templates });
+  assert.equal(run.exitCode, 1);
+  assert.ok(!existsSync(join(dir, PROPS)));
+  const foreign = repo({ ...HUGIN, [CALLER]: "jobs:\n  ci:\n    uses: other/ci.yml@v1\n" });
+  assert.equal(planFiles(foreign, { templates }).stops.length, 1);
 });
 
 test("writeFiles refuses a file that appeared after the plan was made", () => {
