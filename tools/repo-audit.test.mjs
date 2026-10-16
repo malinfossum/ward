@@ -761,6 +761,49 @@ test("fetchRepoData: without admin read every setting is unreadable, whatever th
   }
 });
 
+test("fetchRepoData: a 403 saying code scanning is not enabled means default setup is off, not an unreadable token", async () => {
+  const stub = stubFetch([
+    [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
+    [/\/vulnerability-alerts$/, 204],
+    [
+      /\/code-scanning\/default-setup$/,
+      403,
+      {
+        message:
+          "Code scanning is not enabled for this repository. Please enable code scanning in the repository settings.",
+      },
+    ],
+    ...REPO_ROUTES,
+  ]);
+  try {
+    const data = await fetchRepoData(META, { admin: "admin", read: "read", stacks });
+    assert.deepEqual(data.baseline.codeScanning, { state: "not-configured" });
+    assert.deepEqual(checkBaseline(data.baseline), []);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchRepoData: a 403 on default setup with any other message is still unreadable", async () => {
+  for (const body of [undefined, { message: "Resource not accessible by personal access token" }]) {
+    const stub = stubFetch([
+      [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
+      [/\/vulnerability-alerts$/, 204],
+      [/\/code-scanning\/default-setup$/, 403, body],
+      ...REPO_ROUTES,
+    ]);
+    try {
+      const data = await fetchRepoData(META, { admin: "admin", read: "read", stacks });
+      assert.equal(data.baseline.codeScanning, null);
+      const findings = checkBaseline(data.baseline);
+      assert.deepEqual(kinds(findings), ["token"]);
+      assert.match(findings[0][1], /CodeQL default setup/);
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
 test("fetchRepoData: with no admin token the settings are not read and one finding names the secret", async () => {
   const stub = stubFetch(REPO_ROUTES);
   try {
