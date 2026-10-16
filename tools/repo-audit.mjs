@@ -522,11 +522,22 @@ export function warnKindsFor(owner, env, extra = []) {
   return kinds;
 }
 
+// The API's "message" in an error body, or "" when there is none.
+function messageOf(text) {
+  try {
+    return JSON.parse(text)?.message ?? "";
+  } catch {
+    return "";
+  }
+}
+
 // Status plus parsed body. 401, 403 and 404 come back as a status with a null
 // body, because for the settings endpoints they mean "cannot read" or "off",
-// which the checks decide. Anything else 4xx or 5xx is a real failure. A
-// method and a JSON body are what apply.mjs needs to change a setting; a write
-// answers with its status, so the caller checks for a 2xx before it says done.
+// which the checks decide; the API's message rides along, since one 403 is an
+// answer rather than a refusal (see fetchRepoData). Anything else 4xx or 5xx is
+// a real failure. A method and a JSON body are what apply.mjs needs to change a
+// setting; a write answers with its status, so the caller checks for a 2xx
+// before it says done.
 export async function request(path, token, { method = "GET", body } = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
@@ -546,7 +557,11 @@ export async function request(path, token, { method = "GET", body } = {}) {
     const detail = (await res.text().catch(() => "")).slice(0, 200);
     throw new Error(`GitHub API ${res.status} on ${path}${detail ? `: ${detail}` : ""}`);
   }
-  if (silent) return { status: res.status, body: null };
+  if (res.status === 204) return { status: 204, body: null };
+  if (silent) {
+    const text = await res.text().catch(() => "");
+    return { status: res.status, body: null, message: messageOf(text) };
+  }
   if (method === "GET") return { status: res.status, body: await res.json() };
   // A write may answer 2xx with no body at all.
   const text = await res.text();
@@ -554,6 +569,7 @@ export async function request(path, token, { method = "GET", body } = {}) {
 }
 
 const PROPS_OR_PROJECT = /(^|\/)(Directory\.Build\.props|[^/]+\.csproj)$/;
+const CODE_SCANNING_OFF = /code scanning is not enabled/i;
 
 // admin: the token for the settings endpoints, "" when the owner has none;
 // read: the token for the public reads (tree, caller, project files, branch
@@ -596,7 +612,12 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
         updates.status === 404 ? { enabled: false, paused: false } : readable(updates),
       alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
       analysis: meta.security_and_analysis,
-      codeScanning: readable(codeScanning),
+      // An archived repo answers 403 "Code scanning is not enabled" here. That
+      // is default setup off, not a token the audit cannot trust.
+      codeScanning:
+        codeScanning.status === 403 && CODE_SCANNING_OFF.test(codeScanning.message)
+          ? { state: "not-configured" }
+          : readable(codeScanning),
     };
   }
   const unread = admin
