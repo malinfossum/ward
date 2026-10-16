@@ -458,7 +458,12 @@ export function planFiles(
   files.push(planDependabot(read(DEPENDABOT), ecosystems, templates.dependabot));
   if (inputs.dotnet) {
     if (!paths.includes(PROPS)) {
-      files.push({ path: PROPS, action: "create", content: templates.props });
+      // A fresh repo gets the props file; one already on Ward has a green build
+      // that the file would turn warnings-as-errors on, so that is my call.
+      const detail = `copy templates/${PROPS} when the build is ready for warnings as errors`;
+      if (callerText == null)
+        files.push({ path: PROPS, action: "create", content: templates.props });
+      else files.push({ path: PROPS, action: "ask", detail });
     } else if (lf(templates.props.toString("utf8")) === lf(read(PROPS))) {
       files.push({ path: PROPS, action: "keep" });
     } else {

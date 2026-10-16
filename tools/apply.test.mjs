@@ -474,17 +474,26 @@ test("a tie for an input the caller already sets is not a stop: the value is kep
       return full.slice(full.search(CODEQL_BLOCK), full.search(AUTOMERGE_BLOCK)) + block;
     }),
   );
-  // Directory.Build.props is still planned: a caller-only run discards it or accepts it.
+  // A repo already on Ward does not get Directory.Build.props written: warnings
+  // as errors on a green build is a decision, so the plan asks and writes nothing.
   assert.deepEqual(actions(plan), [
     [CALLER, "edit"],
     [DEPENDABOT, "create"],
-    [PROPS, "create"],
+    [PROPS, "ask"],
   ]);
-  const run = await runApply(["files", "--dir", dir], {}, { templates });
+  assert.equal(
+    file(plan, PROPS).detail,
+    "copy templates/Directory.Build.props when the build is ready for warnings as errors",
+  );
+  const run = await runApply(["files", "--dir", dir, "--apply"], {}, { templates });
   assert.equal(run.exitCode, 0);
   assert.ok(run.lines.includes(`edit    ${CALLER}: add the codeql job`));
-  assert.ok(run.lines.includes(`create  ${PROPS}`));
+  assert.ok(run.lines.includes(`ask     ${PROPS}: ${file(plan, PROPS).detail}`));
   assert.ok(!run.lines.some((l) => l.startsWith("stop")));
+  assert.ok(!existsSync(join(dir, PROPS)));
+  assert.ok(existsSync(join(dir, DEPENDABOT)));
+  writeFileSync(join(dir, PROPS), templates.props);
+  assert.equal(file(planFiles(dir, { templates }), PROPS).action, "keep");
 });
 
 test("a settled input keeps the caller's own value, and the caller is kept once it has the codeql job", () => {
