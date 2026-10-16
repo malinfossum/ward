@@ -34,7 +34,8 @@ jobs:
 
 The baseline also covers Dependabot with auto-merge for patch and minor updates (GitHub's own actions
 only; third-party actions wait for review), secret scanning with push protection, CodeQL on every
-pull request (forks included) through the caller's `codeql` job, and a ruleset on `main`. The full
+pull request (forks included) through the caller's `codeql` job, a ruleset on `main`, and merged
+branches deleted on their own. The full
 standard is in [the design spec](docs/specs/2026-09-25-ci-standard-design.md).
 
 Two more checks live outside `ci.yml`. [`repo-hygiene.yml`](.github/workflows/repo-hygiene.yml) is a

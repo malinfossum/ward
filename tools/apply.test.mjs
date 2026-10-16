@@ -753,6 +753,7 @@ const META = {
   full_name: "malinfossum/x",
   default_branch: "main",
   allow_auto_merge: false,
+  delete_branch_on_merge: false,
   security_and_analysis: { secret_scanning: SCAN_OFF, secret_scanning_push_protection: SCAN_OFF },
 };
 const GATE = {
@@ -802,7 +803,7 @@ test("request sends a JSON body with the method and the token", async () => {
   }
 });
 
-test("settings: plans the three changes a bare repo needs and makes them only with --apply", async () => {
+test("settings: plans the four changes a bare repo needs and makes them only with --apply", async () => {
   const stub = stubFetch(bareRoutes());
   try {
     const dry = await runApply(["settings", "malinfossum/x"], ENV);
@@ -813,6 +814,7 @@ test("settings: plans the three changes a bare repo needs and makes them only wi
         "Dependabot alerts on",
         "Dependabot security updates on",
         "secret scanning and push protection on",
+        "delete merged branches on",
       ],
     );
     assert.deepEqual(stub.writes(), []);
@@ -821,12 +823,14 @@ test("settings: plans the three changes a bare repo needs and makes them only wi
       ["PUT", "/repos/malinfossum/x/vulnerability-alerts"],
       ["PUT", "/repos/malinfossum/x/automated-security-fixes"],
       ["PATCH", "/repos/malinfossum/x"],
+      ["PATCH", "/repos/malinfossum/x"],
     ]);
     const patches = stub.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
-    assert.deepEqual(patches[0], {
-      security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
-    });
-    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 3);
+    assert.deepEqual(patches, [
+      { security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON } },
+      { delete_branch_on_merge: true },
+    ]);
+    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 4);
     assert.ok(stub.calls.every((c) => c.auth === "Bearer t"));
   } finally {
     stub.restore();
@@ -836,6 +840,7 @@ test("settings: plans the three changes a bare repo needs and makes them only wi
 test("settings: everything on is kept; a setting the token cannot read is a stop, never a blind write", async () => {
   const onMeta = {
     ...META,
+    delete_branch_on_merge: true,
     security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
   };
   const stub = stubFetch(
@@ -905,6 +910,7 @@ test("settings: a refused write (403) is an error, not done, and stops the rest"
         "set     Dependabot alerts on",
         "set     Dependabot security updates on",
         "set     secret scanning and push protection on",
+        "set     delete merged branches on",
         "done    Dependabot alerts on",
         "error   Dependabot security updates on 403",
       ],
@@ -948,6 +954,7 @@ test("settings and status without a token or with a bad repo name are a stop", a
 // Everything but CodeQL already on, so the CodeQL line is the only decision left.
 const SET_ON = {
   ...META,
+  delete_branch_on_merge: true,
   security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
 };
 const settled = (overrides) =>
@@ -1212,6 +1219,20 @@ test("planSettings: a private repo gets a note to leave the codeql job out", () 
   ]);
 });
 
+test("planSettings: delete merged branches only when the repo reads false, never when the field is missing", () => {
+  const settled = { ...SETTLED, codeScanning: { state: "not-configured", languages: [] } };
+  assert.deepEqual(planSettings(settled, { deleteBranchOnMerge: false }).actions, [
+    {
+      what: "delete merged branches on",
+      method: "PATCH",
+      path: "",
+      body: { delete_branch_on_merge: true },
+    },
+  ]);
+  assert.deepEqual(planSettings(settled, { deleteBranchOnMerge: true }).actions, []);
+  assert.deepEqual(planSettings(settled).actions, []);
+});
+
 test("status prints one line with the state, and readState sees classic protection and open Dependabot PRs", async () => {
   const stub = stubFetch(
     bareRoutes([
@@ -1234,7 +1255,7 @@ test("status prints one line with the state, and readState sees classic protecti
     assert.equal(state.analysed, false);
     assert.equal(
       statusLine(state),
-      "malinfossum/x: auto-merge=false secret-scanning=disabled push-protection=disabled default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
+      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
     );
     const { lines } = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(lines[0], `status  ${statusLine(state)}`);
@@ -1243,7 +1264,7 @@ test("status prints one line with the state, and readState sees classic protecti
   }
 });
 
-test("status says unread, not none, when the ruleset list or the branch rules cannot be read", async () => {
+test("status says unread, not none, when the ruleset list, the branch rules or delete_branch_on_merge cannot be read", async () => {
   const stub = stubFetch(
     bareRoutes([
       [/\/rulesets$/, 403],
@@ -1259,6 +1280,14 @@ test("status says unread, not none, when the ruleset list or the branch rules ca
     assert.match(lines[0], / rulesets=unread rules=unread$/);
   } finally {
     stub.restore();
+  }
+  const { delete_branch_on_merge: _, ...noField } = META;
+  const missing = stubFetch(bareRoutes([[/^\/repos\/malinfossum\/x$/, 200, noField]]));
+  try {
+    const { lines } = await runApply(["status", "malinfossum/x"], ENV);
+    assert.match(lines[0], / delete-branch=unread /);
+  } finally {
+    missing.restore();
   }
 });
 
