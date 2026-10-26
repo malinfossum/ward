@@ -31,7 +31,8 @@ export const SELF_CODEQL = "./.github/workflows/codeql.yml";
 // purpose, listed in stacks.json with a dated reason.
 export const WARN_KINDS = new Set(["uncovered", "exception", "token"]);
 
-// Finding kinds an exception may defer on a joint repo, next to the module names.
+// Finding kinds an exception may defer, next to the module names: a joint repo
+// waiting for the co-owner, or a repo kept off Ward on purpose.
 const DEFERRABLE = ["caller", "ruleset", "baseline"];
 
 // The modules a repo keeps off on purpose, from stacks.json. Repo names on
@@ -465,8 +466,9 @@ export function auditRepo({ repo = "", tree, caller, files, baseline, self }, { 
   findings.push(...checkSuppressions(suppressions));
   const nodeVersion = inputs?.node ? inputs["node-version"] || "24" : "";
   findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
-  // A joint repo can defer a whole kind until the co-owner agrees; the
-  // weekly warning keeps it visible and dated.
+  // A joint repo can defer a whole kind until the co-owner agrees, and a repo
+  // kept off Ward on purpose defers it for good; the weekly warning keeps it
+  // visible and dated either way.
   const deferred = findings.map(([kind, message]) =>
     DEFERRABLE.includes(kind) && exceptions[kind]
       ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[kind]})`]

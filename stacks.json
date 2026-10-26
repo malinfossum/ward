@@ -18,6 +18,11 @@
     "wendhq/wend": {
       "caller": "Joint repo; the caller waits for the co-owner's agreement (2026-10-08).",
       "ruleset": "Joint repo; the ruleset waits for the co-owner's agreement (2026-10-08)."
+    },
+    "malinfossum/intro-exams": {
+      "caller": "Exam submissions, frozen after each sensur; nothing to build or test (2026-10-26).",
+      "ruleset": "Exam submissions, frozen after each sensur; nothing to build or test (2026-10-26).",
+      "baseline": "Exam submissions, frozen after each sensur; nothing to build or test (2026-10-26)."
     }
   },
   "modules": [

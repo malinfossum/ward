@@ -1055,7 +1055,7 @@ test("exceptionsFor matches the repo name case-insensitively and is empty otherw
   assert.deepEqual(exceptionsFor("malinfossum/backend-course", { ...stacks, exceptions: {} }), {});
 });
 
-test("an exception can also defer a caller, ruleset or baseline finding on a joint repo", () => {
+test("an exception can also defer a caller, ruleset or baseline finding", () => {
   const paths = ["Wend.slnx"];
   const deferred = {
     ...stacks,

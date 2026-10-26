@@ -18,7 +18,7 @@ run emails me.
 | `suppression` | A `<NuGetAuditSuppress>` without a `YYYY-MM-DD` dated comment beside or above it |
 | `runtime` | A `<TargetFramework>` or the caller's `node-version` within 90 days of end of life, or past it |
 | `canary` | Ward's `canary.yml` last completed run is not `success`, is older than 8 days, or is missing (a 404) |
-| `exception` | Warning: a module the repo keeps off on purpose, listed in `stacks.json` under `exceptions` with a dated reason; also a stale exception (no files for that module, or the input is set), and a `caller`, `ruleset` or `baseline` finding deferred on a joint repo |
+| `exception` | Warning: a module the repo keeps off on purpose, listed in `stacks.json` under `exceptions` with a dated reason; also a stale exception (no files for that module, or the input is set), and a `caller`, `ruleset` or `baseline` finding deferred on a joint repo or on a repo kept off Ward on purpose |
 | `error` | The audit could not read the repo (a GitHub API error); the other repos still report |
 
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see
