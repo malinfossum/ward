@@ -36,7 +36,12 @@
       "status": "planned",
       "files": ["pyproject.toml", "requirements.txt"]
     },
-    { "name": "powershell", "input": "", "status": "planned", "files": ["*.ps1", "*.psm1"] },
+    {
+      "name": "powershell",
+      "input": "powershell",
+      "status": "shipped",
+      "files": ["*.Tests.ps1"]
+    },
     { "name": "docker", "input": "", "status": "planned", "files": ["Dockerfile", "*.Dockerfile"] }
   ]
 }

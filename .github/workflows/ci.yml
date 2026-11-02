@@ -34,6 +34,12 @@ on:
         description: Startup project for dotnet ef, as a path from the repository root. Defaults to the EF project.
         type: string
         default: ""
+      powershell:
+        description: >-
+          Directory of the Pester tests, or one *.Tests.ps1 file, as a path from the repository root.
+          Runs with Pester 5 under PowerShell 7 on windows-latest. Empty turns the module off.
+        type: string
+        default: ""
       allowed-emails:
         description: >-
           Commit addresses allowed besides Dependabot, comma or newline separated. This file is
@@ -51,6 +57,7 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   ASTRO_TELEMETRY_DISABLED: "1"
   WRANGLER_SEND_METRICS: "false"
+  POWERSHELL_TELEMETRY_OPTOUT: "1"
 
 jobs:
   identity:
@@ -177,8 +184,38 @@ jobs:
           EF_STARTUP_PROJECT: ${{ inputs.dotnet-ef-startup-project }}
         run: node "$RUNNER_TEMP/ward/tools/dotnet-check.mjs" "$DOTNET_PATH"
 
+  # Windows only: PowerShell repos here test Windows modules (CIM, the
+  # registry), which pwsh on Linux does not have.
+  powershell:
+    if: inputs.powershell != ''
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Fetch Ward's tools at this workflow's commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .ward
+          sparse-checkout: tools
+          persist-credentials: false
+      - run: mv .ward "$RUNNER_TEMP/ward"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Pester
+        env:
+          PESTER_PATH: ${{ inputs.powershell }}
+        run: node "$RUNNER_TEMP/ward/tools/powershell-check.mjs" "$PESTER_PATH"
+
   gate:
-    needs: [identity, node, dotnet]
+    needs: [identity, node, dotnet, powershell]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10

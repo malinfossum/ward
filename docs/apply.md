@@ -8,7 +8,7 @@ loadout runs it for me; by hand it runs from a Ward clone at the released tag.
 
 | Command | What it reads | What `--apply` does |
 |---|---|---|
-| `files [--dir <repo>] [--repo <owner/name>]` | The tree, every `.csproj`, the caller, `dependabot.yml`, `Directory.Build.props`, `package.json` | Writes the caller, the Dependabot config and `Directory.Build.props` where they are missing, adds the `codeql` job to a caller that has none (before `automerge:`, or at the end), and adds the npm scripts the module contract needs that are missing (`deploy:check` only for a wrangler setup); a script it will not guess, such as `test`, is reported as `ask`. An existing caller has already settled the inputs it sets, so a tie among the files for one of them (two EF projects at one depth, say) is not a `stop`: the caller's value stands, `""` included. `Directory.Build.props` is written only where the caller is new too: on a repo already on Ward it turns warnings into errors on a build that is green today, so a missing one is reported as `ask` and never written |
+| `files [--dir <repo>] [--repo <owner/name>]` | The tree, every `.csproj`, the caller, `dependabot.yml`, `Directory.Build.props`, `package.json`, and with `GITHUB_TOKEN` set whether the repo is private | Writes the caller, the Dependabot config and `Directory.Build.props` where they are missing, adds the `codeql` job to a caller that has none (before `automerge:`, or at the end), and adds the npm scripts the module contract needs that are missing (`deploy:check` only for a wrangler setup); a script it will not guess, such as `test`, is reported as `ask`. An existing caller has already settled the inputs it sets, so a tie among the files for one of them (two EF projects at one depth, say) is not a `stop`: the caller's value stands, `""` included. `Directory.Build.props` is written only where the caller is new too: on a repo already on Ward it turns warnings into errors on a build that is green today, so a missing one is reported as `ask` and never written |
 | `settings <owner/repo> [--dir <checkout>]` | Dependabot alerts and security updates, secret scanning and push protection, `delete_branch_on_merge`, CodeQL default setup and the languages it scans, the caller's `codeql` job on the default branch or in `--dir`, and the tracked files that job will scan | Turns on what is off (so a merged PR's head branch is deleted on its own), and turns CodeQL default setup off once a caller with the `codeql` job is visible and covers every language default setup scans |
 | `ruleset <owner/repo> [--no-codeql] [--bypass-admin]` | Classic protection, the branch rulesets, CodeQL's analyses of the default branch | Creates or updates the one branch ruleset from `templates/ruleset.json`, keeping the repo's own rule types and required checks |
 | `automerge <owner/repo>` | The rules on the default branch, `allow_auto_merge`, open Dependabot PRs | Allows auto-merge and asks Dependabot to rebase each open PR |
@@ -31,6 +31,19 @@ checks that every language default setup scans (`javascript` and `typescript` co
 would lose is a `stop`, and so is default setup that does not list its languages. On a private repo
 it prints a `note` to leave the job out: CodeQL there needs GitHub Advanced Security.
 
+A private repo of my personal account is on GitHub Free, so it has no Advanced Security and no
+rulesets. GitHub leaves `security_and_analysis` out of the repo's answer even for an admin token,
+answers 403 on code scanning, and answers 403 "Upgrade to GitHub Pro" on rulesets and classic
+protection. When the token reads `permissions.admin` true on such a repo, `settings` reads Dependabot
+on its own and plans only Dependabot alerts, security updates and merged branches deleted, with a
+`note` that secret scanning, push protection and CodeQL need GHAS and a ruleset needs GitHub Pro. A
+missing `security_and_analysis` without admin stays a `stop`. `ruleset` on such a repo is a `stop`
+that names GitHub Pro, so `automerge` refuses too: without a ruleset nothing requires `ward / gate`.
+`files` with `GITHUB_TOKEN` set reads whether the repo (`--repo`, else the origin remote) is
+private. A private repo's new caller gets a comment in place of the `codeql` job, a caller without
+the job is kept rather than edited, and a `note` says why. Without a token, or when GitHub does not
+show the repo, `files` plans as for a public repo; a failed read adds a `note`.
+
 The settings commands read `GITHUB_TOKEN`; locally that is `GITHUB_TOKEN=$(gh auth token)`, which
 has admin on my repos and on both orgs. The token is never printed.
 
@@ -46,9 +59,9 @@ One line per decision, a word padded to seven characters and then the text:
 | `keep` | What is there already matches |
 | `drift` | What is there differs; the detail says how. Nothing is overwritten: I settle it by hand |
 | `ask` | A choice that is mine: a `test` script's runner, or `Directory.Build.props` on a repo already on Ward |
-| `note` | A package a new script needs (I install it, the script never does), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo |
+| `note` | A package a new script needs (I install it, the script never does), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo, what a private repo without GHAS goes without, a repo `files` could not read |
 | `warn` | Files of a stack no module covers yet; the covered modules still apply, and the module is the next PR to Ward |
-| `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, classic branch protection, two branch rulesets, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
+| `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
 | `wait` | CodeQL has not analysed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on, or CodeQL default setup that would be turned off |
 | `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |
@@ -63,7 +76,7 @@ Exit code 0 means nothing to do or everything applied; 1 means stopped, waiting,
 
 ## What it never does
 
-Overwrite a file that exists (the one edit to a caller only inserts the `codeql` job), install a
+Overwrite a file that exists (the one edit to a caller only inserts the `codeql` job, and never on a private repo), install a
 package, guess a `test` runner, merge a PR, enable auto-merge before the ruleset, write the ruleset
 before CodeQL's first analysis, or turn CodeQL default setup off while no caller with the `codeql`
 job is visible. `--no-codeql` is for a repo with no workflows at all, together with a dated
@@ -77,7 +90,10 @@ The same `stacks.json` the audit reads. `node` is the directory of the one `pack
 shallowest when there are several at different depths); `dotnet` is the one solution file, or the one
 project file when there is no solution; `dotnet-os` is `windows-latest` when a project sets `UseWPF`;
 `dotnet-ef-project` is the directory of the one project referencing
-`Microsoft.EntityFrameworkCore.Design`. A tie at one depth is a `stop`, unless the repo's caller
+`Microsoft.EntityFrameworkCore.Design`; `powershell` is the deepest directory that holds every
+`*.Tests.ps1` (`tests` for a repo with one tests folder), and is never a tie, because Pester finds
+the tests below it. A `.ps1` or `.psm1` without a Pester test file plans nothing: like a loose `.js`
+file next to no `package.json`, a helper script is not a stack. A tie at one depth is a `stop`, unless the repo's caller
 already sets that input: then its value is what the files say, and `dotnet-ef-startup-project`
 follows `dotnet-ef-project` from the caller too, `""` when the caller leaves it out. A tie for an
 input the caller does not mention is still mine to settle. Dependabot gets one block per

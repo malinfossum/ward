@@ -27,6 +27,7 @@ import {
   indentOf,
   parseCaller,
   REQUIRED_CHECK,
+  readDependabot,
   request,
   SELF_CODEQL,
   WARD,
@@ -43,10 +44,25 @@ const DEFAULTS = {
   "dotnet-os": "ubuntu-latest",
   "dotnet-ef-project": "",
   "dotnet-ef-startup-project": "",
+  powershell: "",
 };
 
 const depth = (path) => path.split("/").length;
 export const dirOf = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".");
+
+// The deepest directory that holds every one of the files: Pester finds the
+// tests below it, so tests spread over two folders need no choice from me.
+export function commonDir(paths) {
+  if (!paths.length) return "";
+  const dirs = paths.map((path) => (path.includes("/") ? dirOf(path).split("/") : []));
+  const common = [];
+  while (
+    dirs.every((dir) => common.length < dir.length && dir[common.length] === dirs[0][common.length])
+  ) {
+    common.push(dirs[0][common.length]);
+  }
+  return common.join("/") || ".";
+}
 const asDirectory = (dir) => (dir === "." ? "/" : `/${dir}`);
 
 // Any EF Core package except Design and Tools, which only the tooling needs.
@@ -120,6 +136,7 @@ export function planInputs(paths, csproj, stacks) {
     "dotnet-os": wpf ? "windows-latest" : "ubuntu-latest",
     "dotnet-ef-project": ef ? dirOf(ef) : "",
     "dotnet-ef-startup-project": startup ? dirOf(startup) : "",
+    powershell: commonDir(filesOf("powershell")),
   };
   const ecosystems = [{ ecosystem: "github-actions", directory: "/" }];
   for (const path of manifests) {
@@ -284,15 +301,35 @@ const hasCodeqlKey = (text) =>
     .split("\n")
     .some((line) => /^ {2}["']?codeql["']?:\s*(#.*)?$/.test(line));
 
-// The template's codeql job, with the comment lines directly above it.
-function codeqlBlock(template) {
-  const lines = lf(template).split("\n");
+// Where the template's codeql job is, with the comment lines directly above it.
+function codeqlRange(lines) {
   const at = lines.findIndex((line) => /^ {2}codeql:\s*$/.test(line));
   let first = at;
   while (first > 0 && /^ {2}#/.test(lines[first - 1])) first--;
   let last = at;
   while (last + 1 < lines.length && lines[last + 1].trim() !== "") last++;
+  return { first, last };
+}
+
+function codeqlBlock(template) {
+  const lines = lf(template).split("\n");
+  const { first, last } = codeqlRange(lines);
   return lines.slice(first, last + 1);
+}
+
+// CodeQL on a private repo needs GitHub Advanced Security, which a personal
+// account on GitHub Free does not have; the job's uploads would be refused.
+export const PRIVATE_CODEQL = [
+  "  # No codeql job: this repo is private, and CodeQL here needs GitHub",
+  "  # Advanced Security. Add it from Ward's template if the repo goes public.",
+];
+
+// The template for a private repo: a note in place of the codeql job.
+export function withoutCodeqlJob(template) {
+  const lines = lf(template).split("\n");
+  const { first, last } = codeqlRange(lines);
+  lines.splice(first, last - first + 1, ...PRIVATE_CODEQL);
+  return lines.join("\n");
 }
 
 // A caller from before v1.4.0 with the template's codeql job added: before the
@@ -336,10 +373,13 @@ function sameInput(key, current, planned) {
 // An input the caller leaves out counts as "", so a caller written before an
 // input existed is kept while the files say "". A caller from before v1.4.0
 // gets the codeql job as an edit, unless its inputs drift: then I settle the
-// whole file by hand, and the detail names the missing job too.
-function planCaller(text, inputs, template) {
-  if (text == null)
-    return { path: CALLER, action: "create", content: renderCaller(template, inputs) };
+// whole file by hand, and the detail names the missing job too. A private
+// repo's caller goes without the job, so its absence is no edit and no drift.
+function planCaller(text, inputs, template, { isPrivate = false } = {}) {
+  if (text == null) {
+    const base = isPrivate ? withoutCodeqlJob(template) : template;
+    return { path: CALLER, action: "create", content: renderCaller(base, inputs) };
+  }
   const current = parseCaller(lf(text));
   if (!current) {
     const detail = "does not call malinfossum/ward/.github/workflows/ci.yml@v1";
@@ -356,6 +396,10 @@ function planCaller(text, inputs, template) {
       const detail =
         "a codeql job exists but does not call malinfossum/ward/.github/workflows/codeql.yml; fix it by hand";
       return { path: CALLER, action: "drift", detail };
+    }
+    if (isPrivate) {
+      if (drift.length) return { path: CALLER, action: "drift", detail: drift.join("; ") };
+      return { path: CALLER, action: "keep" };
     }
     if (drift.length) {
       return { path: CALLER, action: "drift", detail: `${drift.join("; ")}; no codeql job` };
@@ -434,10 +478,11 @@ function settleByCaller(text, inputs, stops) {
 // What the repo at dir should carry, and what it carries today. Nothing here
 // overwrites: a file that exists and differs is drift for me to settle by
 // hand, so a hand edit (a co-owner's address, a11y in warn) survives a rerun.
-// exceptions names the modules that stay off for this repo, with the reason.
+// exceptions names the modules that stay off for this repo, with the reason;
+// isPrivate leaves the codeql job out of the caller.
 export function planFiles(
   dir,
-  { stacks = loadStacks(), templates = readTemplates(), exceptions = {} } = {},
+  { stacks = loadStacks(), templates = readTemplates(), exceptions = {}, isPrivate = false } = {},
 ) {
   const paths = listTree(dir, stacks);
   const read = (path) => (paths.includes(path) ? readFileSync(join(dir, path), "utf8") : null);
@@ -455,7 +500,12 @@ export function planFiles(
     inputs,
     planned.stops.filter((stop) => !exceptions[stop.module]),
   );
-  files.push(planCaller(callerText, inputs, templates.caller));
+  files.push(planCaller(callerText, inputs, templates.caller, { isPrivate }));
+  if (isPrivate) {
+    notes.push(
+      "This repo is private: CodeQL here needs GitHub Advanced Security, so the caller goes without the codeql job.",
+    );
+  }
   files.push(planDependabot(read(DEPENDABOT), ecosystems, templates.dependabot));
   if (inputs.dotnet) {
     if (!paths.includes(PROPS)) {
@@ -524,11 +574,21 @@ export async function readState(repo, token) {
   const meta = (await request(`/repos/${repo}`, token)).body;
   if (!meta) throw new Error(`Cannot read ${repo}; the token must be allowed to see it.`);
   const data = await fetchRepoData(meta, { admin: token, read: token });
+  // A private repo without GitHub Advanced Security (any private repo of a
+  // personal account on GitHub Free) has no security_and_analysis block, even
+  // for an admin, so fetchRepoData reads no settings. Dependabot's two answer.
+  const withoutGhas =
+    meta.private === true && meta.permissions?.admin === true && meta.security_and_analysis == null;
+  const baseline = withoutGhas
+    ? { ...data.baseline, ...(await readDependabot(repo, token)) }
+    : data.baseline;
   const branch = encodeURIComponent(meta.default_branch);
   const at = (path) => request(`/repos/${repo}${path}`, token);
   const protection = await at(`/branches/${branch}/protection`);
   const classic = protection.status === 200;
   const listed = await at("/rulesets");
+  // GitHub Free answers 403 "Upgrade to GitHub Pro" on a private repo's rules.
+  const needsPro = listed.status === 403 && /upgrade to github pro/i.test(listed.message ?? "");
   const rulesets = (listed.body ?? []).filter((r) => r.target === "branch");
   const existing = rulesets.length === 1 ? (await at(`/rulesets/${rulesets[0].id}`)).body : null;
   const analyses = (await at(`/code-scanning/analyses?ref=refs/heads/${branch}&per_page=1`)).body;
@@ -537,7 +597,9 @@ export async function readState(repo, token) {
     repo,
     meta,
     branch: meta.default_branch,
-    baseline: data.baseline,
+    baseline,
+    withoutGhas,
+    needsPro,
     // The default branch's files and caller: where settings looks for the codeql
     // job and the languages it will scan when no --dir is given.
     tree: data.tree,
@@ -563,13 +625,18 @@ const FOLD = { javascript: "javascript-typescript", typescript: "javascript-type
 // Default setup goes off only when both hold and nothing it scans is lost, so
 // a repo is never left unscanned by accident. deleteBranchOnMerge: the repo's
 // own field; only a read false is turned on, so a field missing from the
-// answer is never a blind write.
+// answer is never a blind write. withoutGhas: a private repo the token has
+// admin on and GitHub shows no security_and_analysis for; secret scanning and
+// CodeQL do not exist there, so only Dependabot and merged branches are planned.
 export function planSettings(
   baseline,
-  { job = false, languages = [], isPrivate = false, deleteBranchOnMerge } = {},
+  { job = false, languages = [], isPrivate = false, withoutGhas = false, deleteBranchOnMerge } = {},
 ) {
   const { alerts, securityUpdates, analysis, codeScanning } = baseline;
-  if ([alerts, securityUpdates, analysis, codeScanning].some((value) => value == null)) {
+  const needed = withoutGhas
+    ? [alerts, securityUpdates]
+    : [alerts, securityUpdates, analysis, codeScanning];
+  if (needed.some((value) => value == null)) {
     const stop = "The token cannot read this repo's settings; it needs admin on the repo.";
     return { stops: [stop], actions: [], notes: [] };
   }
@@ -587,8 +654,9 @@ export function planSettings(
   }
   const on = { status: "enabled" };
   if (
-    analysis.secret_scanning?.status !== "enabled" ||
-    analysis.secret_scanning_push_protection?.status !== "enabled"
+    !withoutGhas &&
+    (analysis.secret_scanning?.status !== "enabled" ||
+      analysis.secret_scanning_push_protection?.status !== "enabled")
   ) {
     actions.push({
       what: "secret scanning and push protection on",
@@ -605,7 +673,7 @@ export function planSettings(
       body: { delete_branch_on_merge: true },
     });
   }
-  if (codeScanning.state === "configured") {
+  if (!withoutGhas && codeScanning.state === "configured") {
     if (!job) {
       notes.push(
         "CodeQL default setup stays on until the caller has the codeql job; run files --apply, then settings --dir <checkout>.",
@@ -635,7 +703,11 @@ export function planSettings(
       }
     }
   }
-  if (isPrivate) {
+  if (withoutGhas) {
+    notes.push(
+      "This repo is private without GitHub Advanced Security: secret scanning, push protection and CodeQL need GHAS, and a ruleset needs GitHub Pro, so they stay off. Leave the codeql job out of its caller.",
+    );
+  } else if (isPrivate) {
     notes.push(
       "This repo is private: CodeQL here needs GitHub Advanced Security, so leave the codeql job out of its caller.",
     );
@@ -698,6 +770,7 @@ async function settingsCommand(state, argv, token, stacks) {
     job: view.job,
     languages: languagesFor(view.paths, stacks.ignore),
     isPrivate: state.meta.private === true,
+    withoutGhas: state.withoutGhas === true,
     deleteBranchOnMerge: state.meta.delete_branch_on_merge,
   });
   const lines = stops.map((stop) => say("stop", stop));
@@ -756,13 +829,32 @@ function repoName(argv, dir) {
   return remote.status === 0 ? repoFromRemote(remote.stdout) : "";
 }
 
-function filesCommand(argv, { stacks, templates }) {
+// Whether the repo is private, read with GITHUB_TOKEN when it is set. Without
+// a token, or for a repo GitHub does not show it, files plans as for a public
+// repo, as it did before it could tell; the note says so when the read failed.
+async function privacyOf(repo, token) {
+  if (!repo || !token) return { isPrivate: false, note: "" };
+  try {
+    const res = await request(`/repos/${repo}`, token);
+    if (res.status === 200) return { isPrivate: res.body?.private === true, note: "" };
+    return {
+      isPrivate: false,
+      note: `GitHub answered ${res.status} for ${repo}, so the plan assumes a public repo.`,
+    };
+  } catch (error) {
+    return { isPrivate: false, note: `${error.message}; the plan assumes a public repo.` };
+  }
+}
+
+async function filesCommand(argv, { stacks, templates, env = {} }) {
   const dir = arg(argv, "--dir", ".");
   if (!existsSync(dir))
     return { lines: [say("stop", `${dir} is not a directory I can read.`)], exitCode: 1 };
   const repo = repoName(argv, dir);
   const exceptions = repo ? exceptionsFor(repo, stacks) : {};
-  const plan = planFiles(dir, { stacks, templates, exceptions });
+  const privacy = await privacyOf(repo, env.GITHUB_TOKEN || "");
+  const plan = planFiles(dir, { stacks, templates, exceptions, isPrivate: privacy.isPrivate });
+  if (privacy.note) plan.notes.push(privacy.note);
   const lines = [];
   const shown = Object.entries(plan.inputs).map(([key, value]) => `${key}="${value}"`);
   lines.push(say("inputs", shown.join(" ")));
@@ -848,6 +940,11 @@ export function sameRuleset(existing, body) {
 
 export function planRuleset(state, template, { bypassAdmin = false, noCodeql = false } = {}) {
   const stops = [];
+  if (state.needsPro) {
+    const stop =
+      "This repo is private on GitHub Free: a ruleset needs GitHub Pro or a public repo, so it stays without one.";
+    return { stops: [stop], wait: "", action: "", body: null };
+  }
   if (!state.rulesetsRead) {
     stops.push("The token cannot list this repo's rulesets; it needs admin on the repo.");
   }
@@ -943,7 +1040,7 @@ export async function runApply(argv, env, deps = {}) {
   const [command, ...rest] = argv;
   const stacks = deps.stacks ?? loadStacks();
   const templates = deps.templates ?? readTemplates();
-  if (command === "files") return filesCommand(rest, { stacks, templates });
+  if (command === "files") return await filesCommand(rest, { stacks, templates, env });
   if (!SETTINGS_COMMANDS.includes(command) || !REPO.test(rest[0] ?? "")) {
     return { lines: [say("usage", USAGE)], exitCode: 1 };
   }

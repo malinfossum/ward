@@ -142,6 +142,7 @@ test("every workflow that runs steps turns telemetry off", () => {
       "DOTNET_CLI_TELEMETRY_OPTOUT",
       "ASTRO_TELEMETRY_DISABLED",
       "WRANGLER_SEND_METRICS",
+      "POWERSHELL_TELEMETRY_OPTOUT",
     ]) {
       assert.match(readWorkflow(file), new RegExp(`^\\s+${name}:`, "m"), `${file}: ${name}`);
     }
@@ -228,7 +229,7 @@ test("every node fixture a Ward caller names has a package-lock.json", () => {
 test("the gate fails on a failed or cancelled module and lets a skipped one through", () => {
   const gate = jobsOf(".github/workflows/ci.yml").find((job) => job.name === "gate");
   assert.ok(gate, "no gate job in ci.yml");
-  assert.match(gate.body, /needs: \[identity, node, dotnet\]/);
+  assert.match(gate.body, /needs: \[identity, node, dotnet, powershell\]/);
   assert.match(gate.body, /if: always\(\)/);
   assert.match(
     gate.body,

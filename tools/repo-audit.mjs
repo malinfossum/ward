@@ -203,12 +203,13 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
       ]);
     }
   }
-  const dotnet = inputs.dotnet ?? "";
-  if (dotnet && bare(dotnet) !== ".") {
-    const target = bare(dotnet).replace(/\/$/, "");
+  for (const key of ["dotnet", "powershell"]) {
+    const value = inputs[key] ?? "";
+    if (!value || bare(value) === ".") continue;
+    const target = bare(value).replace(/\/$/, "");
     const exists = have.has(target) || paths.some((path) => path.startsWith(`${target}/`));
     if (!exists) {
-      findings.push(["inputs", `dotnet points at ${dotnet}, which is not on the default branch.`]);
+      findings.push(["inputs", `${key} points at ${value}, which is not on the default branch.`]);
     }
   }
   return findings;
@@ -586,6 +587,24 @@ const CODE_SCANNING_OFF = /code scanning is not enabled/i;
 // meta with the admin token. Without it every settings field is null
 // (unreadable) and the settings endpoints are not called, because their 404
 // would be ambiguous. With it, a 404 on either Dependabot endpoint means off.
+// Dependabot alerts and security updates, read with an admin token. A 404 on
+// either means off; any other failure is null (unread).
+export async function readDependabot(repo, admin) {
+  const [updates, alerts] = await Promise.all([
+    request(`/repos/${repo}/automated-security-fixes`, admin),
+    request(`/repos/${repo}/vulnerability-alerts`, admin),
+  ]);
+  return {
+    securityUpdates:
+      updates.status === 404
+        ? { enabled: false, paused: false }
+        : updates.status === 200
+          ? updates.body
+          : null,
+    alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
+  };
+}
+
 export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
   const repo = meta.full_name;
   const branch = encodeURIComponent(meta.default_branch);
@@ -607,15 +626,12 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   const rules = readable(await request(`/repos/${repo}/rules/branches/${branch}`, read));
   let settings = { securityUpdates: null, alerts: null, analysis: null, codeScanning: null };
   if (admin && meta.security_and_analysis != null) {
-    const [updates, alerts, codeScanning] = await Promise.all([
-      request(`/repos/${repo}/automated-security-fixes`, admin),
-      request(`/repos/${repo}/vulnerability-alerts`, admin),
+    const [dependabot, codeScanning] = await Promise.all([
+      readDependabot(repo, admin),
       request(`/repos/${repo}/code-scanning/default-setup`, admin),
     ]);
     settings = {
-      securityUpdates:
-        updates.status === 404 ? { enabled: false, paused: false } : readable(updates),
-      alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
+      ...dependabot,
       analysis: meta.security_and_analysis,
       // An archived repo answers 403 "Code scanning is not enabled" here. That
       // is default setup off, not a token the audit cannot trust.

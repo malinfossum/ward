@@ -9,6 +9,7 @@ import {
   CALLER,
   DEPENDABOT,
   mergeRuleset,
+  PRIVATE_CODEQL,
   PROPS,
   planAutomerge,
   planFiles,
@@ -142,7 +143,21 @@ test("files under node_modules, bin and obj never count", () => {
     "dotnet-os": "ubuntu-latest",
     "dotnet-ef-project": "",
     "dotnet-ef-startup-project": "",
+    powershell: "",
   });
+});
+
+test("powershell is the folder that holds every Pester test file; plain scripts plan nothing", () => {
+  const tests = ["driverwatch.ps1", "lib/Map.ps1", "tests/Map.Tests.ps1", "tests/Run.Tests.ps1"];
+  assert.equal(plan(tests).inputs.powershell, "tests");
+  assert.equal(plan(["Mod.Tests.ps1", "tests/Run.Tests.ps1"]).inputs.powershell, ".");
+  assert.equal(
+    plan(["src/A/tests/A.Tests.ps1", "src/B/tests/B.Tests.ps1"]).inputs.powershell,
+    "src",
+  );
+  assert.equal(plan(["build.ps1", "lib/Module.psm1"]).inputs.powershell, "");
+  assert.deepEqual(plan(tests).stops, []);
+  assert.deepEqual(plan(tests).uncovered, []);
 });
 
 test("a planned stack is reported as uncovered and still gets its Dependabot block", () => {
@@ -410,6 +425,76 @@ test("input drift plus a missing codeql job stays drift; an unpinned codeql job 
     unpinned.detail,
     "the codeql job uses malinfossum/ward/.github/workflows/codeql.yml@v1, not a full commit SHA",
   );
+});
+
+test("a private repo's new caller has a note in place of the codeql job, and the plan says why", () => {
+  const dir = repo({ "tests/Map.Tests.ps1": "", "lib/Map.ps1": "" });
+  const plan = planFiles(dir, { templates, isPrivate: true });
+  const created = file(plan, CALLER);
+  assert.equal(created.action, "create");
+  assert.doesNotMatch(created.content, /^ {2}codeql:/m);
+  assert.doesNotMatch(created.content, /codeql\.yml/);
+  assert.ok(created.content.includes(PRIVATE_CODEQL.join("\n")));
+  assert.match(created.content, /^ {2}automerge:/m);
+  assert.match(created.content, /^ {6}powershell: "tests" +# /m);
+  const parsed = parseCaller(created.content);
+  assert.equal(parsed.inputs.powershell, "tests");
+  assert.equal(parsed.codeql, "");
+  assert.deepEqual(plan.notes, [
+    "This repo is private: CodeQL here needs GitHub Advanced Security, so the caller goes without the codeql job.",
+  ]);
+});
+
+test("a private repo's caller without the codeql job is kept, and input drift names no missing job", () => {
+  const without = caller({ node: "." }).replace(CODEQL_BLOCK, "");
+  const kept = repo({ [CALLER]: without, "package.json": PKG });
+  assert.equal(file(planFiles(kept, { templates, isPrivate: true }), CALLER).action, "keep");
+  const moved = repo({ [CALLER]: without, "web/package.json": PKG });
+  const drift = file(planFiles(moved, { templates, isPrivate: true }), CALLER);
+  assert.deepEqual([drift.action, drift.detail], ["drift", 'node is ".", the files say "web"']);
+});
+
+test("Pester tests the caller does not run are input drift", () => {
+  const dir = repo({ [CALLER]: caller({}), "tests/Map.Tests.ps1": "" });
+  const drift = file(planFiles(dir, { templates }), CALLER);
+  assert.equal(drift.action, "drift");
+  assert.equal(drift.detail, 'powershell is "", the files say "tests"');
+  const set = repo({ [CALLER]: caller({ powershell: "tests" }), "tests/Map.Tests.ps1": "" });
+  assert.equal(file(planFiles(set, { templates }), CALLER).action, "keep");
+});
+
+test("files reads whether the repo is private when GITHUB_TOKEN is set, and never proposes the codeql job there", async () => {
+  const without = caller({ node: "." }).replace(CODEQL_BLOCK, "");
+  const dir = repo({ [CALLER]: without, "package.json": PKG });
+  const args = ["files", "--dir", dir, "--repo", "malinfossum/x"];
+  const privateRepo = stubFetch([[/^\/repos\/malinfossum\/x$/, 200, { private: true }]]);
+  try {
+    const out = await runApply(args, ENV, { templates });
+    assert.equal(out.exitCode, 0);
+    assert.ok(out.lines.includes(`keep    ${CALLER}`), out.lines.join("\n"));
+    assert.ok(!out.lines.some((line) => line.includes("add the codeql job")));
+  } finally {
+    privateRepo.restore();
+  }
+  const publicRepo = stubFetch([[/^\/repos\/malinfossum\/x$/, 200, { private: false }]]);
+  try {
+    const out = await runApply(args, ENV, { templates });
+    assert.ok(out.lines.includes(`edit    ${CALLER}: add the codeql job`), out.lines.join("\n"));
+  } finally {
+    publicRepo.restore();
+  }
+  const unreadable = stubFetch([[/^\/repos\/malinfossum\/x$/, 404]]);
+  try {
+    const out = await runApply(args, ENV, { templates });
+    assert.ok(out.lines.includes(`edit    ${CALLER}: add the codeql job`));
+    assert.ok(
+      out.lines.includes(
+        "note    GitHub answered 404 for malinfossum/x, so the plan assumes a public repo.",
+      ),
+    );
+  } finally {
+    unreadable.restore();
+  }
 });
 
 test("a codeql job that calls something else is drift, never a second codeql key", () => {
@@ -1231,6 +1316,89 @@ test("planSettings: delete merged branches only when the repo reads false, never
   ]);
   assert.deepEqual(planSettings(settled, { deleteBranchOnMerge: true }).actions, []);
   assert.deepEqual(planSettings(settled).actions, []);
+});
+
+test("planSettings: a private repo without GHAS gets Dependabot and merged branches, and a note for the rest", () => {
+  const bare = {
+    alerts: false,
+    securityUpdates: { enabled: false, paused: false },
+    analysis: null,
+    codeScanning: null,
+  };
+  const plan = planSettings(bare, {
+    isPrivate: true,
+    withoutGhas: true,
+    deleteBranchOnMerge: false,
+  });
+  assert.deepEqual(plan.stops, []);
+  assert.deepEqual(
+    plan.actions.map((a) => a.what),
+    ["Dependabot alerts on", "Dependabot security updates on", "delete merged branches on"],
+  );
+  assert.deepEqual(plan.notes, [
+    "This repo is private without GitHub Advanced Security: secret scanning, push protection and CodeQL need GHAS, and a ruleset needs GitHub Pro, so they stay off. Leave the codeql job out of its caller.",
+  ]);
+  // Without the admin flag the same blanks are still a token that cannot read.
+  assert.deepEqual(planSettings(bare, { isPrivate: true }).stops, [
+    "The token cannot read this repo's settings; it needs admin on the repo.",
+  ]);
+  assert.deepEqual(
+    planSettings({ ...bare, alerts: null }, { isPrivate: true, withoutGhas: true }).stops,
+    ["The token cannot read this repo's settings; it needs admin on the repo."],
+  );
+});
+
+// A private repo of a personal account on GitHub Free, read with an admin token.
+const FREE_PRIVATE = [
+  [
+    /^\/repos\/malinfossum\/x$/,
+    200,
+    {
+      ...META,
+      private: true,
+      permissions: { admin: true },
+      security_and_analysis: null,
+    },
+    "GET",
+  ],
+  [/\/code-scanning\/default-setup$/, 403, { message: "Code scanning is not enabled" }, "GET"],
+  [
+    /\/rulesets$/,
+    403,
+    { message: "Upgrade to GitHub Pro or make this repository public to enable this feature." },
+    "GET",
+  ],
+  [
+    /\/branches\/main\/protection$/,
+    403,
+    { message: "Upgrade to GitHub Pro or make this repository public to enable this feature." },
+    "GET",
+  ],
+];
+
+test("settings on a private repo without GHAS sets Dependabot and merged branches; ruleset names GitHub Pro", async () => {
+  const stub = stubFetch(bareRoutes(FREE_PRIVATE));
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(out.exitCode, 0, out.lines.join("\n"));
+    assert.deepEqual(
+      out.lines.filter((l) => l.startsWith("set")).map((l) => l.slice(8)),
+      ["Dependabot alerts on", "Dependabot security updates on", "delete merged branches on"],
+    );
+    assert.deepEqual(stub.writes(), [
+      ["PUT", "/repos/malinfossum/x/vulnerability-alerts"],
+      ["PUT", "/repos/malinfossum/x/automated-security-fixes"],
+      ["PATCH", "/repos/malinfossum/x"],
+    ]);
+    const ruleset = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
+    assert.equal(ruleset.exitCode, 1);
+    assert.deepEqual(ruleset.lines, [
+      "stop    This repo is private on GitHub Free: a ruleset needs GitHub Pro or a public repo, so it stays without one.",
+    ]);
+    assert.equal(stub.writes().length, 3);
+  } finally {
+    stub.restore();
+  }
 });
 
 test("status prints one line with the state, and readState sees classic protection and open Dependabot PRs", async () => {

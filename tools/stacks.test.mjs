@@ -5,13 +5,14 @@ import { detectStacks, loadStacks } from "./stacks.mjs";
 const stacks = loadStacks();
 const names = (paths) => detectStacks(paths, stacks).map((s) => s.name);
 
-test("stacks.json lists node and dotnet as shipped, with the caller input each needs", () => {
+test("stacks.json lists node, dotnet and powershell as shipped, with the caller input each needs", () => {
   const shipped = stacks.modules.filter((m) => m.status === "shipped");
   assert.deepEqual(
     shipped.map((m) => [m.name, m.input]),
     [
       ["node", "node"],
       ["dotnet", "dotnet"],
+      ["powershell", "powershell"],
     ],
   );
   for (const module of stacks.modules) {
@@ -29,6 +30,13 @@ test("a package.json at the root or in a folder means node", () => {
 test("a solution or project file means dotnet", () => {
   assert.deepEqual(names(["App.slnx", "src/App/App.csproj"]), ["dotnet"]);
   assert.deepEqual(names(["Legacy.sln"]), ["dotnet"]);
+});
+
+// Like package.json for node, the Pester test file is the marker: a repo with
+// only helper scripts (a build.ps1 beside a C# app) has nothing to test.
+test("a Pester test file means powershell; a plain script does not", () => {
+  assert.deepEqual(names(["tests/Map.Tests.ps1", "lib/Map.ps1"]), ["powershell"]);
+  assert.deepEqual(names(["build.ps1", "lib/Module.psm1"]), []);
 });
 
 test("files under node_modules, bin and obj are ignored, but a folder named cabin is not", () => {

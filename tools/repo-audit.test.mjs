@@ -222,6 +222,20 @@ test("an input that points at nothing on the default branch is a finding", () =>
   assert.deepEqual(checkInputs({ node: "web", dotnet: "src/App" }, detected, paths), []);
 });
 
+test("Pester tests need the powershell input, and the input must point at something", () => {
+  const paths = ["lib/Map.ps1", "tests/Map.Tests.ps1"];
+  const detected = detectStacks(paths, stacks);
+  const off = checkInputs({ powershell: "" }, detected, paths);
+  assert.deepEqual(kinds(off), ["inputs"]);
+  assert.match(off[0][1], /powershell files .*tests\/Map\.Tests\.ps1.* powershell input is empty/);
+  const moved = checkInputs({ powershell: "test" }, detected, paths);
+  assert.deepEqual(moved, [
+    ["inputs", "powershell points at test, which is not on the default branch."],
+  ]);
+  assert.deepEqual(checkInputs({ powershell: "tests" }, detected, paths), []);
+  assert.deepEqual(checkInputs({}, detectStacks(["build.ps1"], stacks), ["build.ps1"]), []);
+});
+
 test("a leading ./ in an input is the same path as without it", () => {
   const paths = ["web/package.json", "src/App/App.csproj"];
   const detected = detectStacks(paths, stacks);
