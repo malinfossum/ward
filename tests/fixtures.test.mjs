@@ -81,6 +81,12 @@ test("dotnet-ok runs no tool restore when there is no manifest", () => {
   assert.doesNotMatch(out, /tool restore/, out);
 });
 
+test("powershell-ok passes under Pester 5", () => {
+  const { status, out } = run("powershell-check.mjs", ["fixtures/powershell-ok"]);
+  assert.equal(status, 0, out);
+  assert.match(out, /fixture passes/, out);
+});
+
 // Every module in ci.yml needs a fixture it rejects: a check that never fails
 // is untested. A new module adds its cases here.
 const REJECTS = {
@@ -120,6 +126,18 @@ const REJECTS = {
       run: () =>
         run("dotnet-check.mjs", ["fixtures/dotnet-ef"], { env: { ...EF, FIXTURE_PENDING: "1" } }),
       expect: /::error::pending migrations failed/,
+    },
+  ],
+  powershell: [
+    {
+      name: "powershell-broken: a failing test",
+      run: () => run("powershell-check.mjs", ["fixtures/powershell-broken"]),
+      expect: /::error::Pester failed: 1 of 2 tests/,
+    },
+    {
+      name: "powershell-notests: scripts without a test file",
+      run: () => run("powershell-check.mjs", ["fixtures/powershell-notests"]),
+      expect: /::error::No Pester tests found/,
     },
   ],
 };

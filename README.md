@@ -31,6 +31,7 @@ jobs:
 | identity | Every commit is mine or Dependabot's and carries no AI attribution | always on |
 | node | `lint`, `typecheck`, `test`, `build`, `deploy:check`, `test:e2e`, `test:a11y` from `package.json` | `node`, `a11y` |
 | dotnet | Restore (a repo's tool manifest first), build with warnings as errors, `dotnet format`, test (a test project is required), EF Core pending-model check with paths from the repo root | `dotnet` (folder or solution file), `dotnet-ef-project` |
+| powershell | Pester 5 under PowerShell 7 on `windows-latest`; any failed test, block or test file fails it, and so does a path with no `*.Tests.ps1` | `powershell` (tests folder or one test file) |
 
 The baseline also covers Dependabot with auto-merge for patch and minor updates (GitHub's own actions
 only; third-party actions wait for review), secret scanning with push protection, CodeQL on every
@@ -51,7 +52,7 @@ as a consumer would, and watches that the audit keeps running.
 ```bash
 npm install
 npm test               # unit tests
-npm run test:fixtures  # scripts against good and broken fixtures (needs the .NET 10 SDK)
+npm run test:fixtures  # scripts against good and broken fixtures (needs the .NET 10 SDK and pwsh 7)
 npm run lint
 ```
 
@@ -64,4 +65,4 @@ npm run lint
 | `docs/` | The spec, the plans, `repo-hygiene.md` and `repo-audit.md` |
 | `tools/` | The scripts each job runs, `watchdog.mjs`, `apply.mjs` (puts a repo on the standard, [docs](docs/apply.md)), and their unit tests |
 | `templates/` | What a repo copies: caller, Dependabot config, rulesets, `Directory.Build.props` |
-| `fixtures/`, `tests/` | Known-good and known-broken projects (the C# ones are xUnit) and the tests that run them |
+| `fixtures/`, `tests/` | Known-good and known-broken projects (the C# ones are xUnit, the PowerShell ones Pester) and the tests that run them |
