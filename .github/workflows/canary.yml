@@ -32,6 +32,7 @@ jobs:
     with:
       node: fixtures/node-ok
       dotnet: fixtures/dotnet-ok
+      powershell: fixtures/powershell-ok
 
   rejects:
     runs-on: ubuntu-latest
