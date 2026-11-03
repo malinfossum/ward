@@ -119,8 +119,10 @@ export function parseCaller(text) {
   return { uses, inputs, automerge, codeql };
 }
 
-// self: the repo is Ward, which dogfoods ci.yml by local path.
-export function checkCaller(text, { self }) {
+// self: the repo is Ward, which dogfoods ci.yml by local path. isPrivate: the
+// repo is private, where CodeQL needs GitHub Advanced Security, so apply.mjs
+// files leaves the codeql job out and a caller without one is as it should be.
+export function checkCaller(text, { self, isPrivate = false }) {
   if (text == null) return [["caller", "No .github/workflows/ward.yml on the default branch."]];
   const caller = parseCaller(text);
   if (!caller)
@@ -136,7 +138,9 @@ export function checkCaller(text, { self }) {
     ]);
   }
   if (!caller.codeql) {
-    findings.push(["caller", "ward.yml has no codeql job; run apply.mjs files to add it."]);
+    if (!isPrivate) {
+      findings.push(["caller", "ward.yml has no codeql job; run apply.mjs files to add it."]);
+    }
   } else if (!(CODEQL_PINNED.test(caller.codeql) || (self && caller.codeql === SELF_CODEQL))) {
     findings.push([
       "caller",
@@ -459,10 +463,13 @@ export function checkCanary(runs, now) {
 // One repo, all checks. tree: blob paths on the default branch; caller: the
 // text of .github/workflows/ward.yml or null; files: Directory.Build.props and
 // .csproj texts by path; baseline: see checkBaseline; self: the repo is Ward;
-// repo: full name, for the exception lookup.
-export function auditRepo({ repo = "", tree, caller, files, baseline, self }, { stacks, today }) {
+// isPrivate: see checkCaller; repo: full name, for the exception lookup.
+export function auditRepo(
+  { repo = "", tree, caller, files, baseline, self, isPrivate = false },
+  { stacks, today },
+) {
   const exceptions = exceptionsFor(repo, stacks);
-  const findings = [...checkBaseline(baseline), ...checkCaller(caller, { self })];
+  const findings = [...checkBaseline(baseline), ...checkCaller(caller, { self, isPrivate })];
   const parsed = caller == null ? null : parseCaller(caller);
   const inputs = parsed?.inputs ?? null;
   findings.push(...checkInputs(inputs, detectStacks(tree, stacks), tree, exceptions));
@@ -649,6 +656,7 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   return {
     repo,
     self: repo === WARD,
+    isPrivate: meta.private === true,
     tree: paths,
     caller,
     files,

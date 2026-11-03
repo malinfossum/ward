@@ -38,6 +38,21 @@ export function requiredChecksFrom(rules) {
     .flatMap((rule) => rule.parameters.required_status_checks.map((check) => check.context));
 }
 
+// Rulesets need GitHub Pro on a private repo, so GitHub Free answers 403
+// "Upgrade to GitHub Pro" for its branch rules. That is a branch with no
+// rules, and the PR is left for review like any other without the required
+// check; it is not a failure of this job. Every other refusal still throws.
+const NEEDS_PRO = /upgrade to github pro/i;
+
+export function rulesOrNone(readRules) {
+  try {
+    return readRules();
+  } catch (error) {
+    if (NEEDS_PRO.test(`${error.stderr ?? ""}\n${error.message}`)) return [];
+    throw error;
+  }
+}
+
 export function decide({
   authors,
   ecosystem,
@@ -110,7 +125,7 @@ function main() {
   };
 
   try {
-    const rules = gh("api", `repos/${env.REPO}/rules/branches/${env.BRANCH}`);
+    const rules = rulesOrNone(() => gh("api", `repos/${env.REPO}/rules/branches/${env.BRANCH}`));
     const result = decide({
       authors: commits.flatMap((commit) => commit.authors.map((author) => author.email ?? "")),
       ecosystem: env.ECOSYSTEM ?? "",
