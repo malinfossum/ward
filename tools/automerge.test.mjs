@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decide, requiredChecksFrom } from "./automerge.mjs";
+import { decide, requiredChecksFrom, rulesOrNone } from "./automerge.mjs";
 import { DEPENDABOT } from "./identity.mjs";
 
 const ok = {
@@ -136,4 +136,41 @@ test("requiredChecksFrom reads status-check rules", () => {
     },
   ];
   assert.deepEqual(requiredChecksFrom(rules), ["ward / gate", "fixtures"]);
+});
+
+test("rulesOrNone: no rules where GitHub Free refuses them on a private repo", () => {
+  const refused = Object.assign(
+    new Error("Command failed: gh api repos/me/private/rules/branches/main"),
+    {
+      stderr:
+        "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)\n",
+    },
+  );
+  assert.deepEqual(
+    rulesOrNone(() => {
+      throw refused;
+    }),
+    [],
+  );
+  assert.deepEqual(decide({ ...ok, requiredChecks: requiredChecksFrom([]) }).merge, false);
+});
+
+test("rulesOrNone: any other failure still throws", () => {
+  const down = Object.assign(
+    new Error("Command failed: gh api repos/me/repo/rules/branches/main"),
+    {
+      stderr: "gh: Server Error (HTTP 502)\n",
+    },
+  );
+  assert.throws(
+    () =>
+      rulesOrNone(() => {
+        throw down;
+      }),
+    /Command failed/,
+  );
+  assert.deepEqual(
+    rulesOrNone(() => [{ type: "deletion" }]),
+    [{ type: "deletion" }],
+  );
 });

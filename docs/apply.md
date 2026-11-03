@@ -39,10 +39,13 @@ on its own and plans only Dependabot alerts, security updates and merged branche
 `note` that secret scanning, push protection and CodeQL need GHAS and a ruleset needs GitHub Pro. A
 missing `security_and_analysis` without admin stays a `stop`. `ruleset` on such a repo is a `stop`
 that names GitHub Pro, so `automerge` refuses too: without a ruleset nothing requires `ward / gate`.
+The auto-merge workflow reads that same 403 as a branch with no rules and leaves the PR for review,
+so a private caller that keeps the `automerge` job runs green instead of red.
 `files` with `GITHUB_TOKEN` set reads whether the repo (`--repo`, else the origin remote) is
 private. A private repo's new caller gets a comment in place of the `codeql` job, a caller without
-the job is kept rather than edited, and a `note` says why. Without a token, or when GitHub does not
-show the repo, `files` plans as for a public repo; a failed read adds a `note`.
+the job is kept rather than edited, and a `note` says why. The audit follows the same rule: a
+private caller without the `codeql` job is not a `caller` finding. Without a token, or when GitHub
+does not show the repo, `files` plans as for a public repo; a failed read adds a `note`.
 
 The settings commands read `GITHUB_TOKEN`; locally that is `GITHUB_TOKEN=$(gh auth token)`, which
 has admin on my repos and on both orgs. The token is never printed.

@@ -181,7 +181,11 @@ test("the codeql job must be there and call Ward's codeql.yml at a full commit S
   assert.deepEqual(checkCaller(withoutJob, { self: false }), [
     ["caller", "ward.yml has no codeql job; run apply.mjs files to add it."],
   ]);
+  // A private repo has no CodeQL without GHAS, so files leaves the job out there.
+  assert.deepEqual(checkCaller(withoutJob, { self: false, isPrivate: true }), []);
   const floating = CALLER.replace(`codeql.yml@${CODEQL_SHA} # v1.4.0`, "codeql.yml@v1");
+  // A codeql job a private caller does have is still held to the pin.
+  assert.deepEqual(kinds(checkCaller(floating, { self: false, isPrivate: true })), ["caller"]);
   const [unpinned] = checkCaller(floating, { self: false });
   assert.equal(unpinned[0], "caller");
   assert.match(unpinned[1], /codeql job uses .*codeql\.yml@v1; it must be .* at a full commit SHA/);
@@ -576,6 +580,17 @@ test("auditRepo runs every check over one repo's data", () => {
   assert.equal(suppressions.length, 4);
 });
 
+test("auditRepo: a private caller without the codeql job is not a caller finding", () => {
+  const withoutJob = CALLER.replace(/\n {2}codeql:\n(?: {4,}\S[^\n]*\n)+/, "");
+  const data = { self: false, tree: ["package.json"], caller: withoutJob, files: {}, baseline };
+  const callerKinds = (result) => kinds(result.findings).filter((kind) => kind === "caller");
+  assert.deepEqual(callerKinds(auditRepo(data, { stacks, today: "2026-09-30" })), ["caller"]);
+  assert.deepEqual(
+    callerKinds(auditRepo({ ...data, isPrivate: true }, { stacks, today: "2026-09-30" })),
+    [],
+  );
+});
+
 test("tokenFor: an org's own token, WARD_AUDIT_TOKEN for my repos only, never the Actions token", () => {
   const env = {
     GITHUB_TOKEN: "actions",
@@ -724,6 +739,7 @@ test("fetchRepoData: with admin read, 200 and 204 fill every setting", async () 
     assert.deepEqual(data.baseline, baseline);
     assert.deepEqual(data.tree, ["package.json", "src/App.csproj"]);
     assert.equal(data.caller, CALLER);
+    assert.equal(data.isPrivate, false);
     assert.deepEqual(data.files, { "src/App.csproj": "<TargetFramework>net8.0</TargetFramework>" });
     assert.deepEqual(checkBaseline(data.baseline), []);
     for (const call of stub.calls) {
