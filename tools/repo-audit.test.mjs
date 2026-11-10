@@ -1211,3 +1211,28 @@ test("auditRepo passes the repo's exceptions through", () => {
   assert.ok(findings.some(([kind]) => kind === "exception"));
   assert.ok(!findings.some(([kind]) => kind === "inputs"));
 });
+
+test("request retries a transient 5xx read, never a write", async () => {
+  const seen = [];
+  const original = globalThis.fetch;
+  const statuses = [502, 200, 502, 502, 502, 502, 200];
+  globalThis.fetch = async (_url, init = {}) => {
+    seen.push(init.method ?? "GET");
+    const status = statuses.shift();
+    return new Response(status === 200 ? JSON.stringify({ id: 1 }) : "Server Error", { status });
+  };
+  try {
+    const read = await request("/repos/x/y", "t", { retryDelayMs: 0 });
+    assert.deepEqual(read, { status: 200, body: { id: 1 } });
+    assert.equal(seen.length, 2);
+    await assert.rejects(() => request("/repos/x/y", "t", { retryDelayMs: 0 }), /GitHub API 502/);
+    assert.equal(seen.length, 5);
+    await assert.rejects(
+      () => request("/repos/x/y", "t", { method: "PATCH", body: {}, retryDelayMs: 0 }),
+      /GitHub API 502/,
+    );
+    assert.equal(seen.length, 6);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

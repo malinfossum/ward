@@ -76,11 +76,13 @@ const STOP = new Set([
   "my",
 ]);
 
+// A hyphen splits like a space: "social-work roots" and "social work" are the
+// same words, and a description and its README spell a compound both ways.
 export function tokenize(text) {
   return new Set(
     (text || "")
       .toLowerCase()
-      .replace(/[^a-z0-9\s-]/g, " ")
+      .replace(/[^a-z0-9\s]/g, " ")
       .split(/\s+/)
       .filter((w) => w.length > 2 && !STOP.has(w)),
   );
@@ -309,15 +311,32 @@ export async function checkLinks(md, exists, fetchImpl = fetch) {
 
 export const contentsPath = (path) => path.split("/").map(encodeURIComponent).join("/");
 
-export async function api(path, token) {
-  const res = await fetch(`${API}${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "repo-hygiene",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  });
+// GitHub answers a 5xx now and then on one read in a sweep of hundreds, and
+// one such answer is a red Monday (09.11.2026: a 502 on workbench). A read
+// gets three tries, a growing pause apart, before its status counts; reading
+// again changes nothing, so the retry is safe. Writes never come through here.
+const TRANSIENT = new Set([500, 502, 503, 504]);
+export async function retrying(send, delayMs = 1000, tries = 3) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await send();
+    if (!TRANSIENT.has(res.status) || attempt === tries) return res;
+    await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+  }
+}
+
+export async function api(path, token, { retryDelayMs = 1000 } = {}) {
+  const res = await retrying(
+    () =>
+      fetch(`${API}${path}`, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "repo-hygiene",
+          "X-GitHub-Api-Version": "2022-11-28",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      }),
+    retryDelayMs,
+  );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`GitHub API ${res.status} on ${path}`);
   return res.json();
