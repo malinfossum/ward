@@ -7,7 +7,7 @@
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
-import { fetchFile, listRepos } from "./repo-hygiene.mjs";
+import { fetchFile, listRepos, retrying } from "./repo-hygiene.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
 
 export const WARD = "malinfossum/ward";
@@ -550,19 +550,22 @@ function messageOf(text) {
 // answer rather than a refusal (see fetchRepoData). Anything else 4xx or 5xx is
 // a real failure. A method and a JSON body are what apply.mjs needs to change a
 // setting; a write answers with its status, so the caller checks for a 2xx
-// before it says done.
-export async function request(path, token, { method = "GET", body } = {}) {
-  const res = await fetch(`${API}${path}`, {
-    method,
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "ward-repo-audit",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
+// before it says done. A read retries a transient 5xx (see retrying); a write
+// does not, since a repeated write could apply twice.
+export async function request(path, token, { method = "GET", body, retryDelayMs = 1000 } = {}) {
+  const send = () =>
+    fetch(`${API}${path}`, {
+      method,
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "ward-repo-audit",
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  const res = method === "GET" ? await retrying(send, retryDelayMs) : await send();
   const silent = res.status === 204 || [401, 403, 404].includes(res.status);
   if (res.status >= 400 && !silent) {
     // The API says why (a validation message on a 422); the first line of it

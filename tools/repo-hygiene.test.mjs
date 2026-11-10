@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  api,
   checkLinks,
   checkMetadata,
   checkStack,
@@ -209,4 +210,64 @@ test("checkLinks treats throttling as reachable", async () => {
 test("contentsPath encodes each segment and keeps the slashes", () => {
   assert.equal(contentsPath(".github/workflows/ward.yml"), ".github/workflows/ward.yml");
   assert.equal(contentsPath("src/My App/App.csproj"), "src/My%20App/App.csproj");
+});
+
+test("tokenize splits a hyphenated compound, so social-work and social work agree", () => {
+  const words = [...tokenize("Developer with social-work roots")];
+  assert.ok(words.includes("social") && words.includes("work"));
+  assert.ok(!words.includes("social-work"));
+  assert.ok(
+    overlap(
+      "Developer with social-work roots",
+      "Full-stack developer in Norway. I came to code from social work.",
+    ) >= 0.4,
+  );
+});
+
+// A stand-in for fetch that answers each call with the next status in the
+// list, restored in a finally so no test touches the network.
+function fetchSequence(statuses) {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    const status = statuses.shift();
+    return new Response(status === 200 ? JSON.stringify({ ok: true }) : null, { status });
+  };
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+test("api retries a transient 5xx read and then answers", async () => {
+  const stub = fetchSequence([502, 503, 200]);
+  try {
+    assert.deepEqual(await api("/repos/x/y", "", { retryDelayMs: 0 }), { ok: true });
+    assert.equal(stub.calls.length, 3);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("api gives a read three tries, then the status is the failure", async () => {
+  const stub = fetchSequence([502, 502, 502, 200]);
+  try {
+    await assert.rejects(() => api("/repos/x/y", "", { retryDelayMs: 0 }), /GitHub API 502/);
+    assert.equal(stub.calls.length, 3);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("api never retries a 404: that is an answer", async () => {
+  const stub = fetchSequence([404, 200]);
+  try {
+    assert.equal(await api("/repos/x/y", "", { retryDelayMs: 0 }), null);
+    assert.equal(stub.calls.length, 1);
+  } finally {
+    stub.restore();
+  }
 });
