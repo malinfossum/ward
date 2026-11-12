@@ -3,11 +3,13 @@ import { test } from "node:test";
 import {
   decide,
   isReleaseTag,
+  mergeArgs,
   requiredChecksFrom,
   rulesOrNone,
+  squashBody,
   wardTargets,
 } from "./automerge.mjs";
-import { DEPENDABOT } from "./identity.mjs";
+import { commitProblems, DEPENDABOT, GITHUB_WEB } from "./identity.mjs";
 
 const ok = {
   authors: [DEPENDABOT],
@@ -297,4 +299,66 @@ test("rulesOrNone: any other failure still throws", () => {
     rulesOrNone(() => [{ type: "deletion" }]),
     [{ type: "deletion" }],
   );
+});
+
+const ME = "Malin Fossum <malinfossum.dev@proton.me>";
+const URL = "https://github.com/me/repo/pull/7";
+const dependabotBody = [
+  "Bumps [vitest](https://github.com/vitest-dev/vitest) from 4.0.1 to 4.0.2.",
+  "",
+  "---",
+  "updated-dependencies:",
+  "- dependency-name: vitest",
+  "...",
+  "",
+  "Signed-off-by: dependabot[bot] <support@github.com>",
+].join("\n");
+
+test("the merge call carries my co-author trailer in the squash body", () => {
+  const args = mergeArgs(URL, [{ messageBody: dependabotBody }], ME);
+  assert.deepEqual(args.slice(0, 4), ["pr", "merge", "--auto", "--squash"]);
+  assert.equal(args.at(-1), URL);
+  const body = args[args.indexOf("--body") + 1];
+  assert.match(body, /\nCo-authored-by: Malin Fossum <malinfossum\.dev@proton\.me>$/);
+  assert.ok(!args.includes("--subject"), "the squash title stays GitHub's default");
+});
+
+test("the squash body keeps Dependabot's message and joins its trailer block", () => {
+  assert.equal(
+    squashBody([{ messageBody: dependabotBody }], ME),
+    `${dependabotBody}\nCo-authored-by: ${ME}`,
+  );
+});
+
+test("the trailer gets its own paragraph after prose", () => {
+  const body = squashBody([{ messageBody: "Bumps x.\r\n" }], ME);
+  assert.equal(body, `Bumps x.\n\nCo-authored-by: ${ME}`);
+});
+
+test("an empty commit body leaves only the trailer", () => {
+  assert.equal(squashBody([{ messageBody: "" }, {}], ME), `Co-authored-by: ${ME}`);
+});
+
+test("no co-author leaves GitHub's default squash body", () => {
+  const args = mergeArgs(URL, [{ messageBody: dependabotBody }], "");
+  assert.deepEqual(args, ["pr", "merge", "--auto", "--squash", URL]);
+});
+
+test("a co-author that is not Name <address> is refused", () => {
+  const bad = ["malinfossum.dev@proton.me", "Malin <nope>", "Malin <a@b>\nCo-authored-by: X <x@y>"];
+  for (const value of bad) {
+    assert.throws(() => mergeArgs(URL, [], value), /Name <address>/, value);
+  }
+});
+
+test("Ward's identity check accepts the auto-merged squash commit", () => {
+  const squash = {
+    sha: "abc1234",
+    author: DEPENDABOT,
+    committer: GITHUB_WEB,
+    subject: "Bump vitest from 4.0.1 to 4.0.2",
+    body: squashBody([{ messageBody: dependabotBody }], ME),
+  };
+  const policy = { allowed: ["malinfossum.dev@proton.me"], allowHumanCoauthors: false };
+  assert.deepEqual(commitProblems(squash, policy), []);
 });

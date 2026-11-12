@@ -140,6 +140,38 @@ export function decide({
   return { merge: true, reason: `${what} of ${dependencies.join(", ")}` };
 }
 
+// The squash commit is Dependabot's, so GitHub credits it to no one else. A
+// co-author trailer puts it on my contributions graph too. The body is
+// GitHub's default for a squash of these commits plus the trailer, which joins
+// Dependabot's Signed-off-by block. GitHub keeps a body set when auto-merge is
+// enabled and uses it for the merge later.
+const CO_AUTHOR = /^[^<>\r\n]+ <[^\s<>@]+@[^\s<>]+>$/;
+const TRAILER = /^[\w-]+: \S/;
+
+export function squashBody(commits, coAuthor) {
+  const body = commits
+    .map((commit) => (commit.messageBody ?? "").replaceAll("\r\n", "\n").trim())
+    .filter(Boolean)
+    .join("\n\n");
+  const trailer = `Co-authored-by: ${coAuthor}`;
+  if (!body) return trailer;
+  const last = body
+    .split(/\n\s*\n/)
+    .at(-1)
+    .split("\n");
+  return `${body}${last.every((line) => TRAILER.test(line)) ? "\n" : "\n\n"}${trailer}`;
+}
+
+// Without a co-author, GitHub writes its default squash body.
+export function mergeArgs(prUrl, commits, coAuthor) {
+  const args = ["pr", "merge", "--auto", "--squash"];
+  if (coAuthor) {
+    if (!CO_AUTHOR.test(coAuthor)) throw new Error("co-author must read Name <address>");
+    args.push("--body", squashBody(commits, coAuthor));
+  }
+  return [...args, prUrl];
+}
+
 // Each Ward SHA the PR moves to, with the release tag that names it and
 // whether Ward's main contains it. GitHub's tag list gives each tag's commit,
 // annotated tags already peeled.
@@ -177,7 +209,7 @@ function main() {
   );
 
   // Every refusal, and every failure below, turns off auto-merge that an
-  // earlier run enabled — for example before I pushed a commit of my own
+  // earlier run enabled, for example before I pushed a commit of my own
   // onto the PR. Skipped when auto-merge was never on, so a fresh PR's first
   // (failing) run does not shell out for nothing.
   const disableAutoMerge = () => {
@@ -215,7 +247,8 @@ function main() {
       console.log(`::notice::Leaving this PR for review: ${result.reason}`);
       return;
     }
-    execFileSync("gh", ["pr", "merge", "--auto", "--squash", env.PR_URL], { stdio: "inherit" });
+    const args = mergeArgs(env.PR_URL, commits, (env.CO_AUTHOR ?? "").trim());
+    execFileSync("gh", args, { stdio: "inherit" });
     console.log(`Auto-merge enabled: ${result.reason}`);
   } catch (error) {
     disableAutoMerge();
