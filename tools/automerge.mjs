@@ -1,8 +1,8 @@
 // Decides whether a Dependabot PR may auto-merge: only Dependabot's own
-// commits, patch or minor only, nothing bound to the .NET runtime, no
-// third-party action, never Ward itself, and only where the base branch
-// requires Ward's gate. Without a required check, auto-merge would merge
-// instantly.
+// commits, patch or minor (or a major of a development dependency), nothing
+// bound to the .NET runtime, no third-party action, Ward itself only at a
+// release tag, and only where the base branch requires Ward's gate. Without a
+// required check, auto-merge would merge instantly.
 import { execFileSync, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { DEPENDABOT } from "./identity.mjs";
@@ -19,9 +19,25 @@ export const RUNTIME_BOUND = [
   /(^|\/)dotnet\//i,
 ];
 
-// Ward's workflows hold write access in every repo that calls them, and the
-// caller pins them to a SHA so that I read each bump.
-export const NEVER_AUTO = [/^malinfossum\/ward/i];
+// Ward's workflows hold write access in every repo that calls them, so the
+// caller pins them to a SHA. A bump merges only when every SHA it moves to is
+// the commit of a vX.Y.Z tag on Ward's main: a tag ruleset lets only me create
+// or move those, so the tag is my review. Anything else named like Ward is a
+// look-alike and waits.
+export const WARD = /^malinfossum\/ward(\/|$)/i;
+const LOOK_ALIKE = /^malinfossum\/ward/i;
+export const WARD_REPO = "malinfossum/ward";
+
+const RELEASE_TAG = /^v\d+\.\d+\.\d+$/;
+export const isReleaseTag = (name) => RELEASE_TAG.test(name);
+
+// The Ward SHAs a PR diff adds. fetch-metadata cannot give them: a SHA pin
+// with a version comment reports the comment, and a SHA-to-SHA bump reads as
+// a major.
+export function wardTargets(diff) {
+  const added = /^\+.*\buses:\s*["']?malinfossum\/ward\/[^@\s"']+@([0-9a-f]{40})\b/gim;
+  return [...new Set([...diff.matchAll(added)].map((match) => match[1].toLowerCase()))];
+}
 
 // Actions from GitHub's own organisations. Any other action runs inside
 // workflows that may hold deploy secrets, so it waits for my review.
@@ -53,13 +69,36 @@ export function rulesOrNone(readRules) {
   }
 }
 
+const MAJOR = "version-update:semver-major";
+const DEVELOPMENT = "direct:development";
+
+function decideWard(dependencies, wardPins) {
+  if (dependencies.some((name) => !WARD.test(name))) {
+    return { merge: false, reason: "a Ward bump arrives in its own PR; this one mixes in others" };
+  }
+  if (wardPins.length === 0) {
+    return { merge: false, reason: "a Ward bump with no Ward pin in the diff" };
+  }
+  for (const pin of wardPins) {
+    const short = pin.sha.slice(0, 7);
+    if (!pin.release) return { merge: false, reason: `${short} is not a Ward release tag` };
+    if (!pin.onMain) {
+      return { merge: false, reason: `${pin.release} (${short}) is not on Ward's main` };
+    }
+  }
+  const releases = [...new Set(wardPins.map((pin) => pin.release))];
+  return { merge: true, reason: `Ward release ${releases.join(", ")}` };
+}
+
 export function decide({
   authors,
   ecosystem,
   updateType,
+  dependencyType,
   dependencies,
   requiredChecks,
   requiredCheck,
+  wardPins = [],
 }) {
   const others = authors.filter((author) => author.toLowerCase() !== DEPENDABOT);
   if (others.length || authors.length === 0) {
@@ -68,9 +107,6 @@ export function decide({
   if (!requiredChecks.includes(requiredCheck)) {
     return { merge: false, reason: `the base branch does not require "${requiredCheck}"` };
   }
-  if (!SAFE.has(updateType)) {
-    return { merge: false, reason: `${updateType || "an unknown update type"} needs my review` };
-  }
   if (!ecosystem || dependencies.length === 0) {
     return { merge: false, reason: "missing Dependabot metadata" };
   }
@@ -78,9 +114,17 @@ export function decide({
   if (RUNTIME_ECOSYSTEMS.has(kind)) {
     return { merge: false, reason: `runtime-bound: the ${ecosystem} ecosystem` };
   }
-  const ward = dependencies.filter((name) => NEVER_AUTO.some((pattern) => pattern.test(name)));
-  if (ward.length) {
-    return { merge: false, reason: `Ward itself: ${ward.join(", ")}` };
+  const lookAlikes = dependencies.filter((name) => LOOK_ALIKE.test(name) && !WARD.test(name));
+  if (lookAlikes.length) {
+    return { merge: false, reason: `a look-alike of Ward: ${lookAlikes.join(", ")}` };
+  }
+  // Checked before the update type: fetch-metadata calls every SHA bump a major.
+  if (dependencies.some((name) => WARD.test(name))) return decideWard(dependencies, wardPins);
+  // fetch-metadata reports the most production-like type among the PR's
+  // dependencies, so direct:development means every one of them is.
+  const devMajor = updateType === MAJOR && dependencyType === DEVELOPMENT;
+  if (!SAFE.has(updateType) && !devMajor) {
+    return { merge: false, reason: `${updateType || "an unknown update type"} needs my review` };
   }
   const bound = dependencies.filter((name) => RUNTIME_BOUND.some((pattern) => pattern.test(name)));
   if (bound.length) {
@@ -92,12 +136,35 @@ export function decide({
       return { merge: false, reason: `third-party action: ${thirdParty.join(", ")}` };
     }
   }
-  return { merge: true, reason: `${updateType} of ${dependencies.join(", ")}` };
+  const what = devMajor ? "development major" : updateType;
+  return { merge: true, reason: `${what} of ${dependencies.join(", ")}` };
+}
+
+// Each Ward SHA the PR moves to, with the release tag that names it and
+// whether Ward's main contains it. GitHub's tag list gives each tag's commit,
+// annotated tags already peeled.
+function wardPinsOf(prUrl, gh, ghText) {
+  const shas = wardTargets(ghText("pr", "diff", prUrl));
+  if (shas.length === 0) return [];
+  const releases = new Map();
+  const pages = gh("api", "--paginate", "--slurp", `repos/${WARD_REPO}/tags?per_page=100`);
+  for (const tag of pages.flat()) {
+    if (isReleaseTag(tag.name) && !releases.has(tag.commit.sha)) {
+      releases.set(tag.commit.sha, tag.name);
+    }
+  }
+  return shas.map((sha) => {
+    const release = releases.get(sha) ?? null;
+    if (!release) return { sha, release, onMain: false };
+    const { status } = gh("api", `repos/${WARD_REPO}/compare/${sha}...main`);
+    return { sha, release, onMain: status === "ahead" || status === "identical" };
+  });
 }
 
 function main() {
   const env = process.env;
-  const gh = (...args) => JSON.parse(execFileSync("gh", args, { encoding: "utf8" }));
+  const ghText = (...args) => execFileSync("gh", args, { encoding: "utf8" });
+  const gh = (...args) => JSON.parse(ghText(...args));
 
   // Fetched first, outside the try/catch below, so that a failure further
   // down still knows whether auto-merge is currently on.
@@ -126,14 +193,20 @@ function main() {
 
   try {
     const rules = rulesOrNone(() => gh("api", `repos/${env.REPO}/rules/branches/${env.BRANCH}`));
+    const dependencies = (env.DEPENDENCIES ?? "")
+      .split(",")
+      .map((d) => d.trim())
+      .filter(Boolean);
+    const wardPins = dependencies.some((name) => WARD.test(name))
+      ? wardPinsOf(env.PR_URL, gh, ghText)
+      : [];
     const result = decide({
       authors: commits.flatMap((commit) => commit.authors.map((author) => author.email ?? "")),
       ecosystem: env.ECOSYSTEM ?? "",
       updateType: env.UPDATE_TYPE ?? "",
-      dependencies: (env.DEPENDENCIES ?? "")
-        .split(",")
-        .map((d) => d.trim())
-        .filter(Boolean),
+      dependencyType: env.DEPENDENCY_TYPE ?? "",
+      dependencies,
+      wardPins,
       requiredChecks: requiredChecksFrom(rules),
       requiredCheck: env.REQUIRED_CHECK,
     });

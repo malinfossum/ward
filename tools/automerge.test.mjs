@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decide, requiredChecksFrom, rulesOrNone } from "./automerge.mjs";
+import {
+  decide,
+  isReleaseTag,
+  requiredChecksFrom,
+  rulesOrNone,
+  wardTargets,
+} from "./automerge.mjs";
 import { DEPENDABOT } from "./identity.mjs";
 
 const ok = {
@@ -78,13 +84,141 @@ test("a third-party action waits for me", () => {
   assert.match(result.reason, /third-party action: hadolint\/hadolint-action/);
 });
 
-test("a bump of Ward itself never auto-merges", () => {
-  const refs = ["malinfossum/ward", "malinfossum/ward/.github/workflows/dependabot-automerge.yml"];
-  for (const name of refs) {
-    const result = decide({ ...ok, ecosystem: "github_actions", dependencies: [name] });
-    assert.equal(result.merge, false, name);
-    assert.match(result.reason, /Ward itself/);
+const WARD_AUTOMERGE = "malinfossum/ward/.github/workflows/dependabot-automerge.yml";
+const WARD_CODEQL = "malinfossum/ward/.github/workflows/codeql.yml";
+const RELEASE = "bf47ebacef790cd4847856c10f63b0d3601f1c22";
+const MAIN_ONLY = "84a8785a7875f38855a93ad4747133fd9dcd75a6";
+const wardBump = {
+  ...ok,
+  ecosystem: "github_actions",
+  // fetch-metadata reads a SHA-to-SHA bump as a major, so Ward ignores it.
+  updateType: "version-update:semver-major",
+  dependencyType: "direct:production",
+  dependencies: [WARD_AUTOMERGE, WARD_CODEQL],
+  wardPins: [{ sha: RELEASE, release: "v1.7.1", onMain: true }],
+};
+
+test("a Ward bump to a release tag on main merges", () => {
+  const result = decide(wardBump);
+  assert.equal(result.merge, true);
+  assert.match(result.reason, /Ward release v1\.7\.1/);
+});
+
+test("a Ward bump to an untagged commit waits for me", () => {
+  const result = decide({
+    ...wardBump,
+    wardPins: [
+      { sha: RELEASE, release: "v1.7.1", onMain: true },
+      { sha: MAIN_ONLY, release: null, onMain: true },
+    ],
+  });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /84a8785 is not a Ward release/);
+});
+
+test("a Ward bump to a release tag that is not on main waits for me", () => {
+  const result = decide({
+    ...wardBump,
+    wardPins: [{ sha: RELEASE, release: "v1.7.1", onMain: false }],
+  });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /not on Ward's main/);
+});
+
+test("a Ward bump with no Ward pin in the diff waits for me", () => {
+  const result = decide({ ...wardBump, wardPins: [] });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /no Ward pin/);
+});
+
+test("a Ward bump still needs the gate and Dependabot's own commits", () => {
+  assert.equal(decide({ ...wardBump, requiredChecks: [] }).merge, false);
+  assert.equal(decide({ ...wardBump, authors: [DEPENDABOT, "someone@example.com"] }).merge, false);
+});
+
+test("a Ward bump mixed with another dependency waits for me", () => {
+  const result = decide({ ...wardBump, dependencies: [WARD_CODEQL, "actions/checkout"] });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /own PR/);
+});
+
+test("isReleaseTag takes vX.Y.Z only", () => {
+  for (const name of ["v1.7.1", "v2.0.0", "v10.20.30"])
+    assert.equal(isReleaseTag(name), true, name);
+  for (const name of ["v1", "v1.7", "1.7.1", "v1.7.1-rc.1", "v1.7.1x", "release"]) {
+    assert.equal(isReleaseTag(name), false, name);
   }
+});
+
+test("wardTargets reads the Ward SHAs a diff adds, not the ones it removes", () => {
+  const diff = [
+    "diff --git a/.github/workflows/ward.yml b/.github/workflows/ward.yml",
+    `-    uses: ${WARD_CODEQL}@268e66a338df8b4b7f0b929e62243dfda07c8acb # v1.4.0`,
+    `+    uses: ${WARD_CODEQL}@${MAIN_ONLY} # v1.4.0`,
+    `-    uses: ${WARD_AUTOMERGE}@2e968236b033d738a637386491921ff39d071445 # v1.6.0`,
+    `+    uses: ${WARD_AUTOMERGE}@${RELEASE} # v1.7.1`,
+    "+    uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+    `+      - uses: "${WARD_CODEQL}@${RELEASE}"`,
+  ].join("\n");
+  assert.deepEqual(wardTargets(diff), [MAIN_ONLY, RELEASE]);
+});
+
+test("a look-alike of Ward never auto-merges", () => {
+  const result = decide({
+    ...ok,
+    ecosystem: "github_actions",
+    dependencies: ["malinfossum/ward-tools"],
+  });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /look-alike of Ward/);
+});
+
+test("a major of a development dependency merges", () => {
+  const result = decide({
+    ...ok,
+    updateType: "version-update:semver-major",
+    dependencyType: "direct:development",
+    dependencies: ["jsdom"],
+  });
+  assert.equal(result.merge, true);
+  assert.match(result.reason, /development/);
+});
+
+test("a major of a production or indirect dependency waits for me", () => {
+  for (const dependencyType of ["direct:production", "indirect", "", undefined]) {
+    const result = decide({
+      ...ok,
+      updateType: "version-update:semver-major",
+      dependencyType,
+      dependencies: ["react"],
+    });
+    assert.equal(result.merge, false, String(dependencyType));
+    assert.match(result.reason, /semver-major/);
+  }
+});
+
+test("a development major of a runtime-bound .NET package still waits for me", () => {
+  const result = decide({
+    ...ok,
+    ecosystem: "nuget",
+    updateType: "version-update:semver-major",
+    dependencyType: "direct:development",
+    dependencies: ["Microsoft.EntityFrameworkCore.Design"],
+  });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /runtime-bound/);
+});
+
+test("a development major of a third-party action still waits for me", () => {
+  const result = decide({
+    ...ok,
+    ecosystem: "github_actions",
+    updateType: "version-update:semver-major",
+    dependencyType: "direct:development",
+    dependencies: ["hadolint/hadolint-action"],
+  });
+  assert.equal(result.merge, false);
+  assert.match(result.reason, /third-party action/);
 });
 
 test("a PR with a commit by someone else never auto-merges", () => {
@@ -109,16 +243,6 @@ test("missing dependencies never auto-merges", () => {
   const result = decide({ ...ok, ecosystem: "nuget", dependencies: [] });
   assert.equal(result.merge, false);
   assert.match(result.reason, /missing Dependabot metadata/);
-});
-
-test("a fork of Ward under a longer name never auto-merges", () => {
-  const result = decide({
-    ...ok,
-    ecosystem: "github_actions",
-    dependencies: ["malinfossum/ward-tools"],
-  });
-  assert.equal(result.merge, false);
-  assert.match(result.reason, /Ward itself/);
 });
 
 test("no authors at all never auto-merges", () => {

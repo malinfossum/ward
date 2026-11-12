@@ -213,9 +213,30 @@ export function renderDependabot(template, ecosystems) {
   return `${intro}updates:\n${chosen.join("\n\n")}\n`;
 }
 
+// The caller pins Ward's workflows to a commit. Dependabot follows a pin that
+// sits on a release tag from tag to tag, and auto-merge trusts only those, but
+// a pin on any other commit tracks main. The template cannot name its own
+// release commit, so a clone at a release pins to that commit instead.
+const WARD_PIN = /(malinfossum\/ward\/\.github\/workflows\/[\w.-]+\.yml@)[0-9a-f]{40}/g;
+
+export function pinToRelease(template, sha) {
+  return sha ? template.replace(WARD_PIN, `$1${sha}`) : template;
+}
+
+// HEAD's commit when a release tag (v1, or vX.Y.Z) points at it, else null.
+export function releaseCommit(root) {
+  const tags = git(root, ["tag", "--points-at", "HEAD"]);
+  if (tags.status !== 0) return null;
+  const released = tags.stdout.split(/\r?\n/).some((tag) => /^v\d+(\.\d+\.\d+)?$/.test(tag));
+  if (!released) return null;
+  const head = git(root, ["rev-parse", "HEAD^{commit}"]);
+  return head.status === 0 ? head.stdout.trim() : null;
+}
+
 export function readTemplates(root = ROOT) {
+  const caller = readFileSync(join(root, "templates", "ward.yml"), "utf8");
   return {
-    caller: readFileSync(join(root, "templates", "ward.yml"), "utf8"),
+    caller: pinToRelease(caller, releaseCommit(root)),
     dependabot: readFileSync(join(root, "templates", "dependabot.yml"), "utf8"),
     props: readFileSync(join(root, "templates", PROPS)),
     ruleset: JSON.parse(readFileSync(join(root, "templates", "ruleset.json"), "utf8")),
