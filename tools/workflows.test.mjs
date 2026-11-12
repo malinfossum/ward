@@ -93,6 +93,19 @@ test("dependabot-automerge.yml runs the decision even when fetch-metadata fails"
   assert.match(step[1], /^ {8}if: \$\{\{ !cancelled\(\) \}\}$/m);
 });
 
+// An auto-merge starts no workflow, so identity first reads the squash commit
+// on my next push to main. Its co-author must be an address identity allows.
+test("the default auto-merge co-author is an address ci.yml allows by default", () => {
+  const automerge = readFileSync(".github/workflows/dependabot-automerge.yml", "utf8");
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const coAuthor = automerge.match(/^ {6}co-author:\n(?: {8}.*\n)*? {8}default: (.+)$/m);
+  const allowed = ci.match(/^ {6}allowed-emails:\n(?: {8}.*\n)*? {8}default: (.+)$/m);
+  assert.ok(coAuthor && allowed, "both defaults found");
+  const address = coAuthor[1].match(/<([^>]+)>$/)?.[1];
+  assert.ok(address, "the co-author reads Name <address>");
+  assert.ok(allowed[1].split(/[\s,]+/).includes(address));
+});
+
 // The rest of this file guards what Global Constraints promise for every
 // workflow, so a new workflow cannot quietly drop them.
 const workflows = readdirSync(".github/workflows").map((f) => join(".github/workflows", f));

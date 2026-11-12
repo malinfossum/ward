@@ -3,6 +3,7 @@
 # Other majors, runtime-bound .NET packages, third-party actions, untagged Ward
 # commits, PRs with anyone else's commits and repos without the required check
 # are left for me, and a refusal turns off auto-merge that an earlier run enabled.
+# Each merge names me as a co-author, so it counts on my contributions graph.
 name: Ward auto-merge
 
 on:
@@ -11,6 +12,12 @@ on:
       required-check:
         type: string
         default: ward / gate
+      co-author:
+        description: >-
+          Name <address> added as a co-author of each squash merge, so it counts on that person's
+          contributions graph. The address must be in the caller's allowed-emails. Empty adds none.
+        type: string
+        default: Malin Fossum <malinfossum.dev@proton.me>
 
 permissions:
   contents: read
@@ -61,6 +68,7 @@ jobs:
           DEPENDENCY_TYPE: ${{ steps.meta.outputs.dependency-type }}
           DEPENDENCIES: ${{ steps.meta.outputs.dependency-names }}
           REQUIRED_CHECK: ${{ inputs.required-check }}
+          CO_AUTHOR: ${{ inputs.co-author }}
           REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.pull_request.base.ref }}
           PR_URL: ${{ github.event.pull_request.html_url }}

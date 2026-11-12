@@ -109,6 +109,13 @@ test("a squash merge's co-author line for me or Dependabot passes", () => {
   assert.deepEqual(textProblems(`Bump x\n\n${mine}\n${bot}\n`, policy), []);
 });
 
+test("a Dependabot squash commit with my co-author trailer passes", () => {
+  const trailers = `Signed-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: Malin Fossum <${ME}>`;
+  const body = `Bumps x.\n\n${trailers}\n`;
+  const squash = commit({ author: DEPENDABOT, committer: GITHUB_WEB, body });
+  assert.deepEqual(commitProblems(squash, policy), []);
+});
+
 test("a Dependabot PR's title and body are not checked", () => {
   const pr = { title: "Bump x", body: "Release notes\n\nGenerated with Copilot\n" };
   assert.deepEqual(prTextProblems({ ...pr, author: "dependabot[bot]" }, policy), []);

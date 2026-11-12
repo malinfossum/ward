@@ -233,6 +233,13 @@ only when the author is `dependabot[bot]`. It uses `dependabot/fetch-metadata` a
 The merge itself waits for `ward / gate` and CodeQL. Majors, runtime-bound packages, third-party actions
 and Ward's own bumps stay as open PRs for me. Squash is the method because a Dependabot PR is one commit.
 
+**Each squash merge names me as a co-author.** The squash commit is Dependabot's, so without a trailer no
+auto-merge counts on my contributions graph. The workflow passes `--body` with GitHub's default squash body
+(Dependabot's commit message) plus `Co-authored-by: Malin Fossum <malinfossum.dev@proton.me>`, and GitHub
+keeps a body set at enable time for the merge later. The `co-author` input holds that default, so a
+co-owned repo can credit someone else, or no one with an empty value. The address must be in the
+caller's `allowed-emails`, or `identity` turns main red on the next push. Decided 12.11.2026.
+
 **Merges by `GITHUB_TOKEN` start no workflows.** An auto-merge made with the workflow's token triggers no
 `push` run on `main`, so neither Ward's push check nor a deploy workflow runs for it. The caller
 therefore also runs weekly on `schedule`, and on demand through `workflow_dispatch`, which re-checks
