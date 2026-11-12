@@ -4,8 +4,6 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    cooldown:
-      semver-major-days: 21
     groups:
       actions-first-party:
         patterns:
