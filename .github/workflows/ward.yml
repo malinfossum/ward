@@ -49,8 +49,11 @@ jobs:
       WRANGLER_SEND_METRICS: "false"
       POWERSHELL_TELEMETRY_OPTOUT: "1"
     steps:
+      # Every tag comes along, so the pin check reads GitHub's tags from the
+      # checkout instead of calling GitHub from a test.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -60,6 +63,8 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: npm ci
+      - name: Template pins sit on release tags
+        run: npm run test:pins
       - run: npm run test:fixtures
 
   hygiene:
