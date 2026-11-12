@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -76,6 +77,59 @@ test("the caller template uses ci.yml@v1, a SHA-pinned auto-merge and a weekly r
   assert.doesNotMatch(caller, /@0{40}/, "auto-merge still pins the pre-release placeholder");
   assert.match(caller, /^\s{2}schedule:/m);
   assert.match(caller, /^\s{2}workflow_dispatch:/m);
+});
+
+// Dependabot moves a Ward pin from tag to tag only when the pin sits on a
+// release tag's commit. On any other commit it tracks main and keeps a stale
+// comment, and a commit off a side branch can run older code than the comment
+// says. The template cannot name the release it ships in, so it pins the newest
+// release that exists; apply.mjs repins a new caller to the release it runs
+// from. GitHub's tags are the ones Dependabot sees, so this asks GitHub.
+const WARD_PINS =
+  /malinfossum\/ward\/\.github\/workflows\/([\w.-]+\.yml)@([0-9a-f]{40})(?: # (\S+))?/g;
+
+function releaseTags() {
+  const remote = spawnSync(
+    "git",
+    ["ls-remote", "--tags", "https://github.com/malinfossum/ward.git", "refs/tags/v*"],
+    { encoding: "utf8" },
+  );
+  assert.equal(remote.status, 0, `cannot list Ward's tags on GitHub: ${remote.stderr}`);
+  const tags = new Map();
+  for (const line of remote.stdout.split(/\r?\n/)) {
+    const m = line.match(/^([0-9a-f]{40})\trefs\/tags\/(v\d+\.\d+\.\d+)(\^\{\})?$/);
+    // An annotated tag's peeled line names its commit; a lightweight tag has only the one.
+    if (m && (m[3] || !tags.has(m[2]))) tags.set(m[2], m[1]);
+  }
+  return tags;
+}
+
+function pinProblems(text, tags) {
+  const problems = [];
+  for (const [, file, sha, comment] of text.matchAll(WARD_PINS)) {
+    const named = [...tags].filter(([, commit]) => commit === sha).map(([tag]) => tag);
+    if (named.length === 0) problems.push(`${file}@${sha} is not the commit of a vX.Y.Z tag`);
+    else if (!named.includes(comment)) {
+      problems.push(`${file}@${sha} says ${comment ?? "nothing"}, but it is ${named.join(", ")}`);
+    }
+  }
+  return problems;
+}
+
+test("the caller template pins Ward's workflows to release tag commits, named in the comment", () => {
+  const tags = releaseTags();
+  assert.ok(tags.size >= 10, "GitHub lists Ward's release tags");
+  const caller = read("templates/ward.yml");
+  assert.equal([...caller.matchAll(WARD_PINS)].length, 2, "codeql and automerge are pinned");
+  assert.deepEqual(pinProblems(caller, tags), []);
+
+  // The pins v1.8.0 shipped with: the last commits that touched each file, not the tag commit.
+  const shipped = [
+    "codeql.yml@54ff16b186a09873e0aee94affdb4cb1ecb6c509 # v1.8.0",
+    "dependabot-automerge.yml@87f6b9c2b6c9143db3746ed1907ed9b1343bda1d # v1.8.0",
+    `codeql.yml@${tags.get("v1.7.1")} # v1.8.0`,
+  ].map((pin) => `    uses: malinfossum/ward/.github/workflows/${pin}`);
+  assert.equal(pinProblems(shipped.join("\n"), tags).length, 3);
 });
 
 test("fixtures carry the template Directory.Build.props unchanged", () => {

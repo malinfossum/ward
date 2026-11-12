@@ -57,6 +57,13 @@ npm run test:fixtures  # scripts against good and broken fixtures (needs the .NE
 npm run lint
 ```
 
+The caller template pins Ward's `codeql` and `automerge` jobs to the commit of a `vX.Y.Z` tag,
+never to the last commit that touched a file: on any other commit Dependabot tracks `main` instead
+of moving from tag to tag. A release PR cannot name its own merge commit, so it leaves the pins on
+the previous release, and the next change to the template moves them up. `apply.mjs` pins a new
+caller to the release it runs from either way. `npm test` checks the pins against Ward's tags on
+GitHub, so it needs the network.
+
 ## Layout
 
 | Path | What |

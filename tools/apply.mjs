@@ -216,7 +216,8 @@ export function renderDependabot(template, ecosystems) {
 // The caller pins Ward's workflows to a commit. Dependabot follows a pin that
 // sits on a release tag from tag to tag, and auto-merge trusts only those, but
 // a pin on any other commit tracks main. The template cannot name its own
-// release commit, so a clone at a release pins to that commit instead.
+// release commit, so it pins the newest release that exists when it changes,
+// and a clone at a release pins to that release's commit instead.
 const WARD_PIN = /(malinfossum\/ward\/\.github\/workflows\/[\w.-]+\.yml@)[0-9a-f]{40}/g;
 
 export function pinToRelease(template, sha) {
