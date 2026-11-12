@@ -1,5 +1,6 @@
 # Ward baseline. Keep the blocks for ecosystems this repo uses; delete the rest.
-# Majors are never grouped, so each gets its own PR for me to read.
+# Majors are never grouped, so each gets its own PR for me to read. Every block
+# waits 21 days before it proposes a major, so a broken x.0.0 is fixed by then.
 version: 2
 updates:
   # GitHub's own actions are grouped and may auto-merge. Ward's two pins arrive
@@ -9,6 +10,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      semver-major-days: 21
     groups:
       actions-first-party:
         patterns:
@@ -24,6 +27,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      semver-major-days: 21
     groups:
       npm-minor-patch:
         patterns: ["*"]
@@ -33,6 +38,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      semver-major-days: 21
+    # .NET majors come with the next runtime, and I move to it on purpose, not
+    # one package at a time. Remove this when I move to the next .NET.
+    ignore:
+      - dependency-name: "Microsoft.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "System.*"
+        update-types: ["version-update:semver-major"]
     groups:
       dotnet-runtime:
         patterns:
@@ -56,16 +70,25 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      semver-major-days: 21
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker # Dockerfile
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      semver-major-days: 21
 
   - package-ecosystem: pip # pyproject.toml or requirements.txt
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      semver-major-days: 21
     groups:
       pip-minor-patch:
         patterns: ["*"]

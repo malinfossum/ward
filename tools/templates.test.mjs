@@ -105,3 +105,31 @@ test("the caller template's codeql job is SHA-pinned and sits between ward and a
     assert.match(block, new RegExp(`^ {6}${line}$`, "m"), line);
   }
 });
+
+const ecosystemBlocks = () =>
+  read("templates/dependabot.yml")
+    .split(/^ {2}- package-ecosystem: /m)
+    .slice(1)
+    .map((block) => ({ ecosystem: block.split(/[\s#]/)[0], block }));
+
+test("every Dependabot block waits 21 days before a major", () => {
+  const blocks = ecosystemBlocks();
+  assert.ok(blocks.length >= 6);
+  for (const { ecosystem, block } of blocks) {
+    assert.match(block, /^ {4}cooldown:\r?\n {6}semver-major-days: 21\r?$/m, ecosystem);
+  }
+});
+
+test(".NET majors are ignored until I move to the next runtime", () => {
+  const ignores = (name) =>
+    [
+      ...ecosystemBlocks()
+        .find((b) => b.ecosystem === name)
+        .block.matchAll(
+          /- dependency-name: "([^"]+)"\r?\n\s+update-types: \["version-update:semver-major"\]/g,
+        ),
+    ].map((m) => m[1]);
+  assert.deepEqual(ignores("nuget"), ["Microsoft.*", "System.*"]);
+  assert.deepEqual(ignores("dotnet-sdk"), ["*"]);
+  assert.deepEqual(ignores("npm"), []);
+});
