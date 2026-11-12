@@ -32,11 +32,11 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: malinfossum/ward/.github/workflows/codeql.yml@98c70a64336c90ceef7b278c66778ad91f9f0314 # v1.7.0
+    uses: malinfossum/ward/.github/workflows/codeql.yml@54ff16b186a09873e0aee94affdb4cb1ecb6c509 # v1.8.0
 
   automerge:
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     permissions:
       contents: write
       pull-requests: write
-    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@9987863d40a510af9a27a223d8007a767a0020ad # v1.7.1
+    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@87f6b9c2b6c9143db3746ed1907ed9b1343bda1d # v1.8.0
