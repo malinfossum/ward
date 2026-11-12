@@ -10,7 +10,8 @@
   "scripts": {
     "lint": "biome ci .",
     "test": "node --test \"tools/*.test.mjs\"",
-    "test:fixtures": "node --test \"tests/*.test.mjs\""
+    "test:fixtures": "node --test \"tests/*.test.mjs\"",
+    "test:pins": "node tools/template-pins.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.6"

@@ -52,8 +52,9 @@ as a consumer would, and watches that the audit keeps running.
 
 ```bash
 npm install
-npm test               # unit tests
+npm test               # unit tests, offline
 npm run test:fixtures  # scripts against good and broken fixtures (needs the .NET 10 SDK and pwsh 7)
+npm run test:pins      # template pins sit on release tags (run git fetch --tags first)
 npm run lint
 ```
 
@@ -61,8 +62,9 @@ The caller template pins Ward's `codeql` and `automerge` jobs to the commit of a
 never to the last commit that touched a file: on any other commit Dependabot tracks `main` instead
 of moving from tag to tag. A release PR cannot name its own merge commit, so it leaves the pins on
 the previous release, and the next change to the template moves them up. `apply.mjs` pins a new
-caller to the release it runs from either way. `npm test` checks the pins against Ward's tags on
-GitHub, so it needs the network.
+caller to the release it runs from either way. `npm run test:pins` checks the pins against the
+tags in the checkout, so it makes no network call. The fixtures job runs it on a checkout with every
+tag from GitHub, and a tag missing locally fails the check rather than passing it.
 
 ## Layout
 
