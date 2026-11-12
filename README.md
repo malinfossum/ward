@@ -33,8 +33,9 @@ jobs:
 | dotnet | Restore (a repo's tool manifest first), build with warnings as errors, `dotnet format`, test (a test project is required), EF Core pending-model check with paths from the repo root | `dotnet` (folder or solution file), `dotnet-ef-project` |
 | powershell | Pester 5 under PowerShell 7 on `windows-latest`; any failed test, block or test file fails it, and so does a path with no `*.Tests.ps1` | `powershell` (tests folder or one test file) |
 
-The baseline also covers Dependabot with auto-merge for patch and minor updates (GitHub's own actions
-only; third-party actions wait for review), secret scanning with push protection, CodeQL on every
+The baseline also covers Dependabot with auto-merge for patch and minor updates, majors of
+development dependencies and Ward bumps to a release tag (GitHub's own actions only; third-party
+actions and runtime-bound .NET packages wait for review), secret scanning with push protection, CodeQL on every
 pull request (forks included) through the caller's `codeql` job, a ruleset on `main`, and merged
 branches deleted on their own. The full
 standard is in [the design spec](docs/specs/2026-09-25-ci-standard-design.md).

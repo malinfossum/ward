@@ -11,6 +11,7 @@ import {
   mergeRuleset,
   PRIVATE_CODEQL,
   PROPS,
+  pinToRelease,
   planAutomerge,
   planFiles,
   planInputs,
@@ -18,6 +19,7 @@ import {
   planSettings,
   readState,
   readTemplates,
+  releaseCommit,
   renderCaller,
   renderDependabot,
   runApply,
@@ -247,7 +249,7 @@ test("renderDependabot keeps one block per ecosystem, in order, with its directo
   const blocks = [...text.matchAll(/^ {2}- package-ecosystem: (\S+)/gm)].map((m) => m[1]);
   assert.deepEqual(blocks, ["github-actions", "npm", "nuget"]);
   assert.match(text, /^version: 2$/m);
-  assert.match(text, /^ {2}# Only GitHub's own actions are grouped/m);
+  assert.match(text, /^ {2}# GitHub's own actions are grouped/m);
   assert.match(text, /package-ecosystem: npm[^\n]*\n {4}directory: \/web$/m);
   assert.match(text, /dotnet-runtime:/);
   assert.doesNotMatch(text, /pip|docker|dotnet-sdk/);
@@ -1738,4 +1740,49 @@ test("docs/apply.md documents every command and every output word", () => {
   assert.match(doc, /`codeql` job/);
   assert.match(doc, /--apply/);
   assert.match(doc, /gh auth token/);
+});
+
+const OLD = "9987863d40a510af9a27a223d8007a767a0020ad";
+const NEW = "bf47ebacef790cd4847856c10f63b0d3601f1c22";
+
+test("pinToRelease moves both Ward pins and nothing else", () => {
+  const text = [
+    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD} # v1.7.1`,
+    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${OLD} # v1.7.1`,
+    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
+    `      - uses: actions/checkout@${OLD} # v7.0.1`,
+  ].join("\n");
+  const pinned = pinToRelease(text, NEW).split("\n");
+  assert.equal(
+    pinned[0],
+    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${NEW} # v1.7.1`,
+  );
+  assert.equal(
+    pinned[1],
+    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${NEW} # v1.7.1`,
+  );
+  assert.match(pinned[2], /ci\.yml@v1$/);
+  assert.match(pinned[3], new RegExp(`checkout@${OLD}`));
+  assert.equal(pinToRelease(text, null), text);
+});
+
+test("releaseCommit is HEAD only where a release tag points at it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ward-release-"));
+  after(() => rmSync(dir, { recursive: true, force: true }));
+  const run = (...args) =>
+    spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+      encoding: "utf8",
+    });
+  run("init", "-q");
+  run("commit", "-q", "--allow-empty", "-m", "one");
+  const head = run("rev-parse", "HEAD").stdout.trim();
+  assert.equal(releaseCommit(dir), null, "untagged");
+  run("tag", "nightly");
+  assert.equal(releaseCommit(dir), null, "a tag that is not a release");
+  run("tag", "-a", "v1.8.0", "-m", "v1.8.0");
+  assert.equal(releaseCommit(dir), head, "an annotated release tag");
+  run("tag", "-d", "v1.8.0");
+  run("tag", "v1");
+  assert.equal(releaseCommit(dir), head, "the floating major tag");
+  assert.equal(releaseCommit(join(dir, "missing")), null, "not a repository");
 });

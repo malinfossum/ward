@@ -206,7 +206,11 @@ only when the author is `dependabot[bot]`. It uses `dependabot/fetch-metadata` a
 - every commit on the PR is authored by Dependabot. When I push a commit of my own onto a Dependabot PR,
   the next run refuses, and every refusal also turns off auto-merge that an earlier run enabled, so the
   PR becomes mine to merge;
-- `update-type` is `version-update:semver-patch` or `version-update:semver-minor`;
+- `update-type` is `version-update:semver-patch` or `version-update:semver-minor`, or it is
+  `version-update:semver-major` and `dependency-type` is `direct:development`. fetch-metadata reports
+  the most production-like type among the PR's dependencies, so that means every one is a development
+  dependency; the gate still has to pass. Production and indirect majors wait for me (decided
+  2026-11-12);
 - no dependency in the PR matches the runtime-bound list: `Microsoft.AspNetCore.*`,
   `Microsoft.EntityFrameworkCore.*`, `Microsoft.Extensions.*`, `Microsoft.NET.*`, `System.*`; and the
   PR's package ecosystem is not `dotnet-sdk`, so an SDK bump in `global.json` is refused by its
@@ -216,8 +220,11 @@ only when the author is `dependabot[bot]`. It uses `dependabot/fetch-metadata` a
 - for GitHub Actions, every action is owned by `actions/`, `github/` or `dependabot/`. A third-party
   action waits for my review whatever the update type, because it runs inside workflows that can hold
   deploy secrets. This amends the "patch + minor" rule I locked on 2026-09-25 (decided 2026-09-28);
-- the PR does not bump Ward itself (`malinfossum/ward`). The auto-merge job is SHA-pinned so that I read
-  every change to the code holding write access; merging that bump automatically would undo the pin;
+- a PR that bumps Ward itself (`malinfossum/ward/...`) bumps nothing else, and every Ward SHA it moves
+  to is the commit of a `vX.Y.Z` tag on Ward's main. The jobs holding write access are SHA-pinned so
+  that I read every change to them; a tag ruleset lets only me create, move or delete `v*` tags, so the
+  release tag is that review. An untagged target waits, whatever fetch-metadata calls the update (it
+  reads every SHA-to-SHA bump as a major). Decided 2026-11-12; until then every Ward bump waited;
 - the PR's base branch requires the check. **Auto-merge on a repo without required checks merges
   instantly**, so `apply.mjs` only enables "Allow auto-merge" after the ruleset is in place, and the
   workflow reads the rules of the PR's base branch through the API and refuses if `ward / gate` is

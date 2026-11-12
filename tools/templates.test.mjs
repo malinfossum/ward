@@ -47,6 +47,17 @@ test("runtime-bound NuGet packages are grouped for minor and patch only", () => 
   assert.match(block, /update-types: \[minor, patch\]/);
 });
 
+test("both Ward pins share one group, every update type", () => {
+  const block = read("templates/dependabot.yml")
+    .split(/^ {6}ward:\r?$/m)[1]
+    .split(/^\s*- package-ecosystem/m)[0];
+  assert.deepEqual(
+    [...block.matchAll(/- "([^"]+)"/g)].map((m) => m[1]),
+    ["malinfossum/ward*"],
+  );
+  assert.doesNotMatch(block, /update-types/);
+});
+
 test("only GitHub's own actions are grouped", () => {
   const block = read("templates/dependabot.yml")
     .split("actions-first-party:")[1]

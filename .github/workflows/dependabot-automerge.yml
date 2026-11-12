@@ -1,7 +1,8 @@
-# Auto-merges Dependabot patch and minor updates once every required check
-# passes. Majors, runtime-bound .NET packages, third-party actions, Ward itself,
-# PRs with anyone else's commits and repos without the required check are left
-# for me, and a refusal turns off auto-merge that an earlier run enabled.
+# Auto-merges Dependabot patch and minor updates, majors of development
+# dependencies and Ward bumps to a release tag once every required check passes.
+# Other majors, runtime-bound .NET packages, third-party actions, untagged Ward
+# commits, PRs with anyone else's commits and repos without the required check
+# are left for me, and a refusal turns off auto-merge that an earlier run enabled.
 name: Ward auto-merge
 
 on:
@@ -57,6 +58,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
           UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEPENDENCY_TYPE: ${{ steps.meta.outputs.dependency-type }}
           DEPENDENCIES: ${{ steps.meta.outputs.dependency-names }}
           REQUIRED_CHECK: ${{ inputs.required-check }}
           REPO: ${{ github.repository }}
