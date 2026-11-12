@@ -170,11 +170,19 @@ const ecosystemBlocks = () =>
     .slice(1)
     .map((block) => ({ ecosystem: block.split(/[\s#]/)[0], block }));
 
-test("every Dependabot block waits 21 days before a major", () => {
+// Dependabot rejects the semver-*-days cooldown keys for these ecosystems
+// (docs: dependabot-options-reference, "cooldown"), so the config check fails.
+const noSemverCooldown = new Set(["github-actions", "docker"]);
+
+test("every Dependabot block that can tell a major apart waits 21 days before one", () => {
   const blocks = ecosystemBlocks();
   assert.ok(blocks.length >= 6);
   for (const { ecosystem, block } of blocks) {
-    assert.match(block, /^ {4}cooldown:\r?\n {6}semver-major-days: 21\r?$/m, ecosystem);
+    if (noSemverCooldown.has(ecosystem)) {
+      assert.doesNotMatch(block, /semver-(major|minor|patch)-days/, ecosystem);
+    } else {
+      assert.match(block, /^ {4}cooldown:\r?\n {6}semver-major-days: 21\r?$/m, ecosystem);
+    }
   }
 });
 
