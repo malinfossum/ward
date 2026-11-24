@@ -33,6 +33,7 @@ import {
   WARD,
 } from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
+import { WARD_PINS } from "./template-pins.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const CALLER = ".github/workflows/ward.yml";
@@ -219,18 +220,27 @@ export function renderDependabot(template, ecosystems) {
 // release commit, so it pins the newest release that exists when it changes,
 // and a clone at a release pins to that release's commit instead, with the
 // release's name as the version comment Dependabot reads and rewrites.
-const WARD_PIN = /(malinfossum\/ward\/\.github\/workflows\/[\w.-]+\.yml@)[0-9a-f]{40}(?: # \S+)?/g;
-
 export function pinToRelease(template, release) {
-  return release ? template.replace(WARD_PIN, `$1${release.sha} # ${release.tag}`) : template;
+  if (!release) return template;
+  return template.replace(
+    WARD_PINS,
+    (_, file) => `malinfossum/ward/.github/workflows/${file}@${release.sha} # ${release.tag}`,
+  );
 }
 
 // HEAD's commit and its vX.Y.Z tag when one points at it, else null. The
 // floating v1 alone is not a release: it can sit on a commit no vX.Y.Z names,
 // and Dependabot and auto-merge trust only pins on vX.Y.Z commits. A shallow
 // clone at v1 still gets the vX.Y.Z tag, because git follows tags on HEAD.
+// for-each-ref prints one tag per line whatever column or sort config is set.
 export function releaseCommit(root) {
-  const tags = git(root, ["tag", "--points-at", "HEAD"]);
+  const tags = git(root, [
+    "for-each-ref",
+    "--points-at",
+    "HEAD",
+    "--format=%(refname:short)",
+    "refs/tags/v*",
+  ]);
   if (tags.status !== 0) return null;
   const version = (tag) => tag.slice(1).split(".").map(Number);
   const newer = (a, b) => {

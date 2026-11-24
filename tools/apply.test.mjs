@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   addCodeqlJob,
   CALLER,
@@ -1816,21 +1817,21 @@ test("pinToRelease moves both Ward pins and their version comments, and nothing 
   const text = [
     `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD} # v1.7.1`,
     `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${OLD}`,
+    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD}  #v1.7.1`,
     "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
     `      - uses: actions/checkout@${OLD} # v7.0.1`,
+    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD}`,
+    "    # v1.7.1 stays: a comment on the next line is not the pin's",
   ].join("\n");
   const pinned = pinToRelease(text, { sha: NEW, tag: "v1.10.0" }).split("\n");
-  assert.equal(
-    pinned[0],
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${NEW} # v1.10.0`,
-  );
-  assert.equal(
-    pinned[1],
-    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${NEW} # v1.10.0`,
-    "a pin with no comment gets one",
-  );
-  assert.match(pinned[2], /ci\.yml@v1$/);
-  assert.equal(pinned[3], `      - uses: actions/checkout@${OLD} # v7.0.1`);
+  const moved = (file) => `    uses: malinfossum/ward/.github/workflows/${file}@${NEW} # v1.10.0`;
+  assert.equal(pinned[0], moved("codeql.yml"));
+  assert.equal(pinned[1], moved("dependabot-automerge.yml"), "a pin with no comment gets one");
+  assert.equal(pinned[2], moved("codeql.yml"), "odd spacing is replaced, never doubled");
+  assert.match(pinned[3], /ci\.yml@v1$/);
+  assert.equal(pinned[4], `      - uses: actions/checkout@${OLD} # v7.0.1`);
+  assert.equal(pinned[5], moved("codeql.yml"));
+  assert.equal(pinned[6], "    # v1.7.1 stays: a comment on the next line is not the pin's");
   assert.equal(pinToRelease(text, null), text);
 });
 
@@ -1849,13 +1850,27 @@ test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", 
   assert.equal(releaseCommit(dir), null, "a tag that is not a release");
   run("tag", "v1");
   assert.equal(releaseCommit(dir), null, "the floating major tag alone");
-  run("tag", "-a", "v1.9.1", "-m", "v1.9.1");
-  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.9.1" }, "an annotated release tag");
+  run("tag", "-a", "v1.9.0", "-m", "v1.9.0");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.9.0" }, "an annotated release tag");
+  // Listed in byte order, v1.9.0 comes first: only a sort picks v1.9.1.
+  run("tag", "v1.9.1");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.9.1" }, "the newest, not the first");
+  // A text sort would pick v1.9.1: only a sort by number picks v1.10.0.
   run("tag", "v1.10.0");
-  assert.deepEqual(
-    releaseCommit(dir),
-    { sha: head, tag: "v1.10.0" },
-    "the newest of two, by number",
-  );
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "the newest by number");
+  // A column config puts git tag's whole list on one line; the reader ignores it.
+  run("config", "column.ui", "always");
+  assert.equal(run("tag", "--points-at", "HEAD").stdout.trim().split(/\r?\n/).length, 1);
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "under column.ui=always");
   assert.equal(releaseCommit(join(dir, "missing")), null, "not a repository");
+
+  // The ward skill's clone: shallow, at v1. git follows the tags on HEAD.
+  const clone = join(dir, "clone");
+  const cloned = spawnSync(
+    "git",
+    ["clone", "-q", "--depth", "1", "--branch", "v1", pathToFileURL(dir).href, clone],
+    { encoding: "utf8" },
+  );
+  assert.equal(cloned.status, 0, cloned.stderr);
+  assert.deepEqual(releaseCommit(clone), { sha: head, tag: "v1.10.0" }, "a shallow clone at v1");
 });
