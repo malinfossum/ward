@@ -22,7 +22,7 @@ run emails me.
 | `error` | The audit could not read the repo (a GitHub API error); the other repos still report |
 
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see
-`stacks.json`), `exception` (a module kept off on purpose, listed with its reason), `token` (the token cannot read a repo's settings; on my own repos, and on an org
+`stacks.json`), `exception` (a module kept off on purpose, listed with its reason), `token` (the token cannot read a repo's settings, or GitHub did not answer the branch rules read, which goes through the read token; on my own repos, and on an org
 with its own token, this fails the run instead), and whatever `--warn-kinds` names for a run.
 Private repos never enter the sweep: it lists public repos only, since they keep Actions off and sit
 outside the standard.

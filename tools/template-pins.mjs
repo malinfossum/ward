@@ -5,9 +5,9 @@
 // It reads the tags of the checkout it runs in, so it makes no network call of
 // its own: Ward's fixtures job checks out with every tag from GitHub, and a
 // local run needs `git fetch --tags` first. A missing tag fails, never passes.
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { git } from "./git.mjs";
 
 export const WARD_PINS =
   /(?<![\w.-])malinfossum\/ward\/\.github\/workflows\/([\w.-]+\.yml)@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?/g;
@@ -15,17 +15,11 @@ export const WARD_PINS =
 // Maps each vX.Y.Z tag to its commit. %(*objectname) is the commit an annotated
 // tag points at; a lightweight tag leaves it empty and names the commit itself.
 export function releaseTags(dir) {
-  const listed = spawnSync(
-    "git",
-    [
-      "-C",
-      dir,
-      "for-each-ref",
-      "--format=%(refname:lstrip=2) %(objectname) %(*objectname)",
-      "refs/tags/v*",
-    ],
-    { encoding: "utf8" },
-  );
+  const listed = git(dir, [
+    "for-each-ref",
+    "--format=%(refname:lstrip=2) %(objectname) %(*objectname)",
+    "refs/tags/v*",
+  ]);
   if (listed.status !== 0) return null;
   const tags = new Map();
   for (const line of listed.stdout.split(/\r?\n/)) {
@@ -35,13 +29,38 @@ export function releaseTags(dir) {
   return tags;
 }
 
+// The newest of some vX.Y.Z names, by number (v1.10.0 is newer than v1.9.1),
+// or undefined when there are none.
+export function newestRelease(names) {
+  const version = (tag) => tag.slice(1).split(".").map(Number);
+  const newer = (a, b) => {
+    const [x, y] = [version(a), version(b)];
+    return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+  };
+  return names.filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag)).sort(newer)[0];
+}
+
+// A pin passes as `@<sha> # vX.Y.Z` and nothing after it on the line, where
+// the tag is the newest release on that commit, the one apply.mjs writes when
+// it pins a new caller there.
 export function pinProblems(text, tags) {
   const problems = [];
-  for (const [, file, sha, comment] of text.matchAll(WARD_PINS)) {
-    const named = [...tags].filter(([, commit]) => commit === sha).map(([tag]) => tag);
-    if (named.length === 0) problems.push(`${file}@${sha} is not the commit of a vX.Y.Z tag`);
-    else if (!named.includes(comment)) {
-      problems.push(`${file}@${sha} says ${comment ?? "nothing"}, but it is ${named.join(", ")}`);
+  for (const match of text.matchAll(WARD_PINS)) {
+    const [pin, file, sha, comment] = match;
+    const rest = text
+      .slice(match.index + pin.length)
+      .split(/\r?\n/)[0]
+      .trim();
+    const newest = newestRelease(
+      [...tags].filter(([, commit]) => commit === sha).map(([tag]) => tag),
+    );
+    if (!newest) problems.push(`${file}@${sha} is not the commit of a vX.Y.Z tag`);
+    else if (rest) {
+      problems.push(
+        `${file}@${sha} has text after ${comment ? "its version comment" : "it"}: ${rest}`,
+      );
+    } else if (comment !== newest) {
+      problems.push(`${file}@${sha} says ${comment ?? "nothing"}, but it is ${newest}`);
     }
   }
   return problems;

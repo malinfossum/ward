@@ -63,8 +63,9 @@ never to the last commit that touched a file: on any other commit Dependabot tra
 of moving from tag to tag. A release PR cannot name its own merge commit, so it leaves the pins on
 the previous release, and the next change to the template moves them up. `apply.mjs` pins a new
 caller to the release it runs from either way. `npm run test:pins` checks the pins against the
-tags in the checkout, so it makes no network call. The fixtures job runs it on a checkout with every
-tag from GitHub, and a tag missing locally fails the check rather than passing it.
+tags in the checkout, so it makes no network call. Each pin reads `@<sha> # vX.Y.Z` with nothing
+after it, and names the newest release on that commit. The fixtures job runs it on a checkout
+with every tag from GitHub, and a tag missing locally fails the check rather than passing it.
 
 ## Layout
 

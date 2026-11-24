@@ -108,6 +108,26 @@ test("a template pin passes only on a release tag commit named in its comment", 
   ]);
 });
 
+test("a template pin fails with text after its version comment", () => {
+  const lines = [
+    pin(`codeql.yml@${V180} # v1.8.0 (was v1.7.1)`),
+    pin(`codeql.yml@${V180}" # v1.8.0`),
+    `${pin(`codeql.yml@${V180} # v1.8.0`)}  \r`,
+  ];
+  assert.deepEqual(pinProblems(lines.join("\n"), TAGS), [
+    `codeql.yml@${V180} has text after its version comment: (was v1.7.1)`,
+    `codeql.yml@${V180} has text after it: " # v1.8.0`,
+  ]);
+});
+
+test("a template pin on a commit with two release tags must name the newest", () => {
+  const shared = new Map([...TAGS, ["v1.8.1", V180], ["v1.10.0", V180]]);
+  assert.deepEqual(pinProblems(pin(`codeql.yml@${V180} # v1.10.0`), shared), []);
+  assert.deepEqual(pinProblems(pin(`codeql.yml@${V180} # v1.8.1`), shared), [
+    `codeql.yml@${V180} says v1.8.1, but it is v1.10.0`,
+  ]);
+});
+
 test("the caller template pins Ward twice, codeql and automerge", () => {
   const caller = read("templates/ward.yml");
   const files = [...caller.matchAll(WARD_PINS)].map((m) => m[1]);

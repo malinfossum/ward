@@ -1418,6 +1418,30 @@ test("settings and status: an archived repo reads private reporting as n/a and n
   }
 });
 
+test("settings, ruleset and automerge: an archived repo is a stop with no write, status still reads", async () => {
+  const stub = stubFetch(
+    bareRoutes([[/^\/repos\/malinfossum\/x$/, 200, { ...META, archived: true }, "GET"]]),
+  );
+  try {
+    for (const command of ["settings", "ruleset", "automerge"]) {
+      const out = await runApply([command, "malinfossum/x", "--apply"], ENV);
+      assert.equal(out.exitCode, 1, command);
+      assert.deepEqual(
+        out.lines,
+        [
+          "stop    This repo is archived, so GitHub refuses every write to it; unarchive it first, then rerun.",
+        ],
+        command,
+      );
+    }
+    assert.deepEqual(stub.writes(), []);
+    const status = await runApply(["status", "malinfossum/x"], ENV);
+    assert.equal(status.exitCode, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
 // A private repo of a personal account on GitHub Free, read with an admin token.
 const FREE_PRIVATE = [
   [
@@ -1884,6 +1908,24 @@ test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", 
   assert.equal(releaseCommit(join(dir, "missing")), null, "not a repository");
   mkdirSync(join(dir, "unpacked"));
   assert.equal(releaseCommit(join(dir, "unpacked")), null, "a folder inside another repo");
+  // A git hook exports GIT_DIR, which git obeys over -C: the folder would read
+  // as the top of a work tree, and the outer repo's HEAD as its release.
+  const exported = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+  try {
+    process.env.GIT_DIR = join(dir, ".git");
+    assert.equal(
+      releaseCommit(join(dir, "unpacked")),
+      null,
+      "a folder inside another repo, GIT_DIR set",
+    );
+    process.env.GIT_WORK_TREE = join(dir, "unpacked");
+    assert.equal(releaseCommit(join(dir, "unpacked")), null, "the same, GIT_WORK_TREE set too");
+  } finally {
+    for (const [name, value] of Object.entries(exported)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 
   // The ward skill's clone: shallow, at v1. git follows the tags on HEAD.
   const clone = join(dir, "clone");
