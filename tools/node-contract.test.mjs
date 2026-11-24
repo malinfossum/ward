@@ -1,6 +1,34 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { planSteps } from "./node-contract.mjs";
+import { planSteps, rewritingLint } from "./node-contract.mjs";
+
+test("a lint that rewrites files is named, lint:* included", () => {
+  const scripts = {
+    lint: 'run-s "lint:*"',
+    "lint:oxlint": "oxlint . --fix",
+    "lint:eslint": "eslint . --fix-type problem --cache",
+    "lint:biome": "biome check --write .",
+    "lint:old": "biome check --apply",
+    fix: "eslint . --fix",
+    "format:lint": "prettier --write .",
+  };
+  assert.deepEqual(rewritingLint(scripts), [
+    "lint:oxlint",
+    "lint:eslint",
+    "lint:biome",
+    "lint:old",
+  ]);
+});
+
+test("a check-only lint passes, and a flag that only starts with fix is no rewrite", () => {
+  const scripts = {
+    lint: "biome ci .",
+    "lint:eslint": "eslint . --cache",
+    "lint:fixtures": "node check.mjs --fixtures",
+    "lint:fixed": "tool --fixed-width",
+  };
+  assert.deepEqual(rewritingLint(scripts), []);
+});
 
 const base = {
   scripts: { lint: "x", test: "x" },

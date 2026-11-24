@@ -1,0 +1,9 @@
+{
+  "name": "node-lint-fix",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "node -e \"process.exitCode = 0\" -- --fix",
+    "test": "node -e \"process.exitCode = 0\""
+  }
+}

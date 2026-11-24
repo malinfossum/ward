@@ -48,12 +48,25 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
   return { steps, missing };
 }
 
+// A lint that rewrites files fixes the problem inside the CI runner and then
+// passes, so a fixable error still reaches main. --fix also covers --fix-type
+// and --fix-dangerously; --write and --apply are Biome's and Prettier's.
+const REWRITES = /(?:^|\s)--(?:fix|write|apply)(?!\w)/;
+
+// The lint scripts that rewrite files: lint itself and every lint:* it may run.
+export function rewritingLint(scripts) {
+  return Object.entries(scripts)
+    .filter(([name, cmd]) => /^lint(:|$)/.test(name) && REWRITES.test(cmd))
+    .map(([name]) => name);
+}
+
 function main() {
   const dir = process.argv[2] ?? ".";
   const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  const scripts = pkg.scripts ?? {};
   const { steps, missing } = planSteps({
-    scripts: pkg.scripts ?? {},
+    scripts,
     files: readdirSync(dir),
     a11y: process.env.A11Y ?? "off",
     hasPlaywright: "@playwright/test" in deps,
@@ -62,6 +75,12 @@ function main() {
   let failed = 0;
   for (const script of missing) {
     console.log(`::error::package.json has no "${script}" script, which this repo needs`);
+    failed++;
+  }
+  for (const script of rewritingLint(scripts)) {
+    console.log(
+      `::error::the "${script}" script rewrites files, so CI fixes the problem in the runner and passes. Make it check-only and move the fixing command to a script outside lint:*, such as "fix"`,
+    );
     failed++;
   }
   for (const step of steps) {
