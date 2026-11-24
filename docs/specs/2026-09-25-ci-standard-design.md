@@ -506,7 +506,7 @@ Can every part of the circle be tested? Yes, with one link that sits outside Git
 - The ruleset's "require code scanning results" rule was not in the 2026-09-25 verification pass;
   confirm it is free on public repos before step 1 relies on it. On Ward itself it is not applied
   yet: CodeQL default setup finds no languages while `main` holds only docs, so the rule would block
-  the first code PR forever. I add it once CodeQL has analysed `main` after that merge. A repo with
+  the first code PR forever. I add it once CodeQL has analyzed `main` after that merge. A repo with
   code already on `main` gets the rule from day one.
 - Publishing `@malinfossum/ward-a11y` to npm is a gated step I do or approve at the time.
 

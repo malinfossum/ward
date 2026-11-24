@@ -19,7 +19,7 @@ adds the `codeql` job to the caller, `settings --dir . --apply` turns default se
 until it reads `default-setup=not-configured`, then I push the PR, so its own `codeql` run uploads
 and satisfies the code-scanning rule. `--dir` has no default: run from a Ward clone, `.` would read
 Ward's own caller, so a `--dir` whose origin is another repo is a `stop`. `ruleset` waits until
-CodeQL has analysed the default branch once, because a code-scanning rule before that blocks every
+CodeQL has analyzed the default branch once, because a code-scanning rule before that blocks every
 merge. `automerge` refuses until the default branch requires `ward / gate`, because auto-merge on a
 repo without required checks merges every Dependabot PR at once. `settings` is safe at any time:
 without a visible `codeql` job it leaves default setup on and says so.
@@ -72,7 +72,7 @@ One line per decision, a word padded to seven characters and then the text:
 | `note` | A package a new script needs (I install it, the script never does), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo, what a private repo without GHAS goes without, a repo `files` could not read |
 | `warn` | Files of a stack no module covers yet; the covered modules still apply, and the module is the next PR to Ward |
 | `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
-| `wait` | CodeQL has not analysed the default branch yet; rerun later. Exit 1 |
+| `wait` | CodeQL has not analyzed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on, or CodeQL default setup that would be turned off |
 | `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |
 | `rebase` | An open Dependabot PR that would be asked to rebase |
