@@ -727,7 +727,7 @@ export function planSettings(
       }
     }
   }
-  // The security policy in malinfossum/.github sends reporters to the Security
+  // The security policy in each owner's .github repo sends reporters to the Security
   // tab's "Report a vulnerability"; this is what makes that button appear.
   // "n/a" (a private or archived repo) is left alone. It goes last: a refused
   // write stops the writes after it, and none of the others depend on it.

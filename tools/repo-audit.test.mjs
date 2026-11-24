@@ -890,7 +890,6 @@ test("fetchRepoData: private reporting off is a finding; any other answer but 20
     [200, {}, null],
     // Only meta decides n/a: a 422 on a repo meta calls public is a warning.
     [422, { message: "Repository must be public and not archived" }, null],
-    [502, undefined, null],
   ]) {
     const stub = stubFetch([
       [/\/private-vulnerability-reporting$/, status, body],

@@ -25,9 +25,11 @@ repo without required checks merges every Dependabot PR at once. `settings` is s
 without a visible `codeql` job it leaves default setup on and says so.
 
 Private vulnerability reporting puts the "Report a vulnerability" button on a repo's Security tab.
-The security policy every repo of mine inherits from `malinfossum/.github` sends reporters there, so
-`settings` turns it on wherever it reads off. GitHub offers it on public repos only, and an archived
-repo is read-only, so on either it reads `n/a`: never read, never set, and never a `stop`.
+The security policy each repo inherits from its owner's `.github` repo (`malinfossum/.github` for
+mine) sends reporters there, so `settings` turns it on wherever it reads off. GitHub offers it on
+public repos only, and an archived repo is read-only, so on either it reads `n/a`: never read, never
+set, and never a `stop`. A read that fails is a `note`, never a `stop`: the read needs only Metadata
+(read), so it says nothing about the token, and the other settings still go through.
 
 CodeQL runs as the caller's `codeql` job, which calls Ward's `codeql.yml` at a pinned commit, and
 GitHub refuses its uploads while default setup is on. Before it plans default setup off, `settings`

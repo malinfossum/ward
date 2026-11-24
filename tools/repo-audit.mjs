@@ -292,16 +292,21 @@ export function checkBaseline({
     }
   }
   if (unread) findings.push(["token", unread]);
-  else if (unreadable.length) {
-    findings.push([
-      "token",
-      `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
-    ]);
-  } else if (privateReporting == null) {
-    findings.push([
-      "token",
-      "GitHub did not answer the private vulnerability reporting read. It needs only Metadata (read), so rerun before changing the token.",
-    ]);
+  else {
+    if (unreadable.length) {
+      findings.push([
+        "token",
+        `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
+      ]);
+    }
+    // Without admin read (analysis null) it was never requested, and the
+    // sentence above already covers it.
+    if (privateReporting == null && analysis != null) {
+      findings.push([
+        "token",
+        "GitHub did not answer the private vulnerability reporting read. It needs only Metadata (read), so rerun before changing the token.",
+      ]);
+    }
   }
   return findings;
 }
@@ -511,7 +516,15 @@ export function auditRepo(
   // that kind would stay a warning for good. Unread settings give a token
   // finding, never a baseline one, so the baseline key is not judged then:
   // neither with no admin token nor with one setting unread.
-  const unknown = baseline?.unread || findings.some(([found]) => found === "token");
+  const SETTINGS_FIELDS = [
+    "alerts",
+    "securityUpdates",
+    "analysis",
+    "codeScanning",
+    "privateReporting",
+  ];
+  const unknown =
+    baseline?.unread || (baseline && SETTINGS_FIELDS.some((k) => baseline[k] == null));
   for (const kind of DEFERRABLE) {
     if (!exceptions[kind] || findings.some(([found]) => found === kind)) continue;
     if (kind === "baseline" && unknown) continue;
@@ -644,7 +657,7 @@ export async function readDependabot(repo, admin) {
 // settings. 200 carries { enabled }. Anything else is null (unread): a 401, 403
 // or 404, and also a 422 or a 5xx that survives the retries, which request
 // throws. Only meta decides n/a, so a 422 on a repo meta calls public is a
-// warning, never a silent pass, and it never sinks the repo's other checks.
+// token finding, never a silent pass, and it never sinks the repo's other checks.
 export async function readPrivateReporting(repo, admin) {
   try {
     const res = await request(`/repos/${repo}/private-vulnerability-reporting`, admin);
