@@ -6,8 +6,7 @@
       "dotnet": "Course repo; the one project has no tests (2026-10-02)."
     },
     "malinfossum/workbench": {
-      "node": "Scaffold copies; workbench's own ci.yml tests the tools (2026-10-02).",
-      "dotnet": "Scaffold copies; workbench's own ci.yml tests the tools (2026-10-02)."
+      "node": "Scaffold copies; workbench's own ci.yml tests the tools (2026-10-02)."
     },
     "malinfossum/ember-black": {
       "node": "A VS Code theme: a build script and nothing to lint or test (2026-10-02)."
