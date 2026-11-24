@@ -35,7 +35,7 @@ jobs:
 
 The baseline also covers Dependabot with auto-merge for patch and minor updates, majors of
 development dependencies and Ward bumps to a release tag (GitHub's own actions only; third-party
-actions and runtime-bound .NET packages wait for review), secret scanning with push protection, CodeQL on every
+actions and runtime-bound .NET packages wait for review), secret scanning with push protection, private vulnerability reporting, CodeQL on every
 pull request (forks included) through the caller's `codeql` job, a ruleset on `main`, and merged
 branches deleted on their own. The full
 standard is in [the design spec](docs/specs/2026-09-25-ci-standard-design.md).

@@ -226,7 +226,15 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
 // to find, and an empty rule list in its place would be a false red. unread
 // is set when no admin token exists for the owner: then that one sentence,
 // naming the missing secret, is the repo's only token finding.
-export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning, rules, unread }) {
+export function checkBaseline({
+  securityUpdates,
+  alerts,
+  analysis,
+  codeScanning,
+  privateReporting,
+  rules,
+  unread,
+}) {
   const findings = [];
   const unreadable = [];
   if (alerts == null) unreadable.push("Dependabot alerts");
@@ -243,6 +251,15 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
     if (analysis.secret_scanning_push_protection?.status !== "enabled") {
       findings.push(["baseline", "Push protection is off."]);
     }
+  }
+  // n/a: a private repo (GitHub offers no private reporting there) or an
+  // archived one (read-only, so nothing to report against).
+  if (privateReporting == null) unreadable.push("private vulnerability reporting");
+  else if (privateReporting === false) {
+    findings.push([
+      "baseline",
+      "Private vulnerability reporting is off; the security policy points reporters to it. Run apply.mjs settings.",
+    ]);
   }
   if (codeScanning == null) unreadable.push("CodeQL default setup");
   else if (codeScanning.state === "configured") {
@@ -615,6 +632,13 @@ export async function readDependabot(repo, admin) {
   };
 }
 
+// Private vulnerability reporting, read with the admin token like the other
+// settings. 200 carries { enabled }; any other answer is null (unread).
+export async function readPrivateReporting(repo, admin) {
+  const res = await request(`/repos/${repo}/private-vulnerability-reporting`, admin);
+  return res.status === 200 && typeof res.body?.enabled === "boolean" ? res.body.enabled : null;
+}
+
 export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
   const repo = meta.full_name;
   const branch = encodeURIComponent(meta.default_branch);
@@ -634,14 +658,25 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   }
   const readable = (res) => (res.status === 200 ? res.body : null);
   const rules = readable(await request(`/repos/${repo}/rules/branches/${branch}`, read));
-  let settings = { securityUpdates: null, alerts: null, analysis: null, codeScanning: null };
+  // GitHub offers private reporting on public repos only, and an archived
+  // repo is read-only: on either it is n/a, never read and never a finding.
+  const reporting = meta.private !== true && meta.archived !== true;
+  let settings = {
+    securityUpdates: null,
+    alerts: null,
+    analysis: null,
+    codeScanning: null,
+    privateReporting: reporting ? null : "n/a",
+  };
   if (admin && meta.security_and_analysis != null) {
-    const [dependabot, codeScanning] = await Promise.all([
+    const [dependabot, codeScanning, privateReporting] = await Promise.all([
       readDependabot(repo, admin),
       request(`/repos/${repo}/code-scanning/default-setup`, admin),
+      reporting ? readPrivateReporting(repo, admin) : "n/a",
     ]);
     settings = {
       ...dependabot,
+      privateReporting,
       analysis: meta.security_and_analysis,
       // An archived repo answers 403 "Code scanning is not enabled" here. That
       // is default setup off, not a token the audit cannot trust.

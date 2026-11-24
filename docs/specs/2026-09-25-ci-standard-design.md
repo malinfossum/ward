@@ -160,6 +160,7 @@ instead of burning runner time. Every module runs with .NET, Astro and Wrangler 
 | Dependabot security updates | Known-vulnerable dependencies | Repo setting |
 | Dependabot version updates, weekly, grouped | Drift that turns into a painful major jump; stale pinned actions | `dependabot.yml` from `templates/` |
 | Secret scanning + push protection | A credential pushed by mistake — blocked before it lands | Repo setting |
+| Private vulnerability reporting | A vulnerability reported in a public issue before a fix exists | Repo setting; the policy in `malinfossum/.github` points to it |
 | CodeQL default setup + Copilot Autofix | Injection, XSS, unsafe deserialisation, workflow script injection (the `actions` language); Autofix proposes the patch on the PR | Repo setting |
 | Ruleset on `main` | Merging red, force-pushing, deleting `main` | `templates/ruleset.json` via API |
 | `identity` job | Commits authored as anyone but me or Dependabot; `Co-Authored-By` / `Claude-Session` / "Generated with" trailers; a PR that changes the files deciding what Ward checks (warning) | `identity` job in `ci.yml`, always on |

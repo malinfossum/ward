@@ -654,10 +654,11 @@ export function planSettings(
   baseline,
   { job = false, languages = [], isPrivate = false, withoutGhas = false, deleteBranchOnMerge } = {},
 ) {
-  const { alerts, securityUpdates, analysis, codeScanning } = baseline;
+  const { alerts, securityUpdates, analysis, codeScanning, privateReporting } = baseline;
+  // privateReporting is "n/a" on a private or archived repo, so it never stops one.
   const needed = withoutGhas
-    ? [alerts, securityUpdates]
-    : [alerts, securityUpdates, analysis, codeScanning];
+    ? [alerts, securityUpdates, privateReporting]
+    : [alerts, securityUpdates, analysis, codeScanning, privateReporting];
   if (needed.some((value) => value == null)) {
     const stop = "The token cannot read this repo's settings; it needs admin on the repo.";
     return { stops: [stop], actions: [], notes: [] };
@@ -685,6 +686,15 @@ export function planSettings(
       method: "PATCH",
       path: "",
       body: { security_and_analysis: { secret_scanning: on, secret_scanning_push_protection: on } },
+    });
+  }
+  // The security policy in malinfossum/.github sends reporters to the Security
+  // tab's "Report a vulnerability"; this is what makes that button appear.
+  if (privateReporting === false) {
+    actions.push({
+      what: "private vulnerability reporting on",
+      method: "PUT",
+      path: "/private-vulnerability-reporting",
     });
   }
   if (deleteBranchOnMerge === false) {
@@ -747,6 +757,7 @@ export function statusLine(state) {
     `delete-branch=${state.meta.delete_branch_on_merge ?? "unread"}`,
     `secret-scanning=${analysis.secret_scanning?.status ?? "unread"}`,
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
+    `private-reporting=${state.baseline.privateReporting ?? "unread"}`,
     `default-setup=${state.baseline.codeScanning?.state ?? "unread"}`,
     `analysed=${state.analysed}`,
     `rulesets=${state.rulesetsRead ? state.rulesets.length : "unread"}${state.classic ? "+classic" : ""}`,

@@ -269,6 +269,7 @@ const baseline = {
     secret_scanning_push_protection: { status: "enabled" },
   },
   codeScanning: { state: "not-configured" },
+  privateReporting: true,
   rules: [
     { type: "deletion" },
     { type: "non_fast_forward" },
@@ -305,10 +306,12 @@ test("each baseline setting that is off is its own finding", () => {
       secret_scanning_push_protection: { status: "disabled" },
     },
     codeScanning: { state: "configured" },
+    privateReporting: false,
     rules: [],
   };
   const findings = checkBaseline(off);
   assert.deepEqual(kinds(findings), [
+    "baseline",
     "baseline",
     "baseline",
     "baseline",
@@ -320,9 +323,10 @@ test("each baseline setting that is off is its own finding", () => {
     "ruleset",
     "ruleset",
   ]);
-  assert.match(findings[4][1], /CodeQL default setup is on/);
-  assert.match(findings[5][1], /does not require a pull request/);
-  assert.match(findings[9][1], /"ward \/ gate"/);
+  assert.match(findings[4][1], /Private vulnerability reporting is off/);
+  assert.match(findings[5][1], /CodeQL default setup is on/);
+  assert.match(findings[6][1], /does not require a pull request/);
+  assert.match(findings[10][1], /"ward \/ gate"/);
 });
 
 test("paused security updates and a ruleset without the gate are findings", () => {
@@ -349,7 +353,14 @@ test("a ruleset that allows force pushes or skips code scanning is a finding per
 });
 
 test("a field missing from the fetched data is a token warning, not a crash", () => {
-  for (const field of ["securityUpdates", "alerts", "analysis", "codeScanning", "rules"]) {
+  for (const field of [
+    "securityUpdates",
+    "alerts",
+    "analysis",
+    "codeScanning",
+    "privateReporting",
+    "rules",
+  ]) {
     const findings = checkBaseline({ ...baseline, [field]: undefined });
     assert.deepEqual(kinds(findings), ["token"], field);
   }
@@ -375,6 +386,7 @@ test("a setting the token cannot read is a token warning, not a pass and not a f
     alerts: null,
     analysis: null,
     codeScanning: null,
+    privateReporting: null,
     rules: null,
   };
   const findings = checkBaseline(unreadable);
@@ -699,7 +711,8 @@ async function quietly(fn) {
 }
 
 const b64 = (text) => Buffer.from(text).toString("base64");
-const SETTINGS = /\/(automated-security-fixes|vulnerability-alerts|code-scanning\/default-setup)$/;
+const SETTINGS =
+  /\/(automated-security-fixes|vulnerability-alerts|code-scanning\/default-setup|private-vulnerability-reporting)$/;
 const META = {
   full_name: "malinfossum/x",
   default_branch: "main",
@@ -725,6 +738,7 @@ const REPO_ROUTES = [
     { content: b64("<TargetFramework>net8.0</TargetFramework>") },
   ],
   [/\/rules\/branches\/main$/, 200, baseline.rules],
+  [/\/private-vulnerability-reporting$/, 200, { enabled: true }],
 ];
 
 test("fetchRepoData: with admin read, 200 and 204 fill every setting", async () => {
@@ -780,8 +794,11 @@ test("fetchRepoData: without admin read every setting is unreadable, whatever th
   try {
     const { security_and_analysis, ...plain } = META;
     const data = await fetchRepoData(plain, { admin: "admin", read: "read", stacks });
-    const { securityUpdates, alerts, analysis, codeScanning } = data.baseline;
-    assert.deepEqual([securityUpdates, alerts, analysis, codeScanning], [null, null, null, null]);
+    const { securityUpdates, alerts, analysis, codeScanning, privateReporting } = data.baseline;
+    assert.deepEqual(
+      [securityUpdates, alerts, analysis, codeScanning, privateReporting],
+      [null, null, null, null, null],
+    );
     assert.ok(!stub.calls.some((call) => SETTINGS.test(call.path)), "no settings request");
     const findings = checkBaseline(data.baseline);
     assert.deepEqual(kinds(findings), ["token"]);
@@ -855,6 +872,70 @@ test("fetchRepoData: with no admin token the settings are not read and one findi
     assert.ok(stub.calls.every((call) => call.auth === "Bearer read"));
   } finally {
     stub.restore();
+  }
+});
+
+const SETTINGS_ON = [
+  [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }],
+  [/\/vulnerability-alerts$/, 204],
+  [/\/code-scanning\/default-setup$/, 200, { state: "not-configured" }],
+];
+
+test("fetchRepoData: private reporting off is a baseline finding; any answer but 200 is unreadable", async () => {
+  for (const [status, body, want] of [
+    [200, { enabled: false }, false],
+    [404, undefined, null],
+    [403, { message: "Must have admin rights to Repository." }, null],
+    [200, {}, null],
+  ]) {
+    const stub = stubFetch([
+      [/\/private-vulnerability-reporting$/, status, body],
+      ...SETTINGS_ON,
+      ...REPO_ROUTES,
+    ]);
+    try {
+      const data = await fetchRepoData(META, { admin: "admin", read: "read", stacks });
+      assert.equal(data.baseline.privateReporting, want, `${status} ${JSON.stringify(body)}`);
+      const findings = checkBaseline(data.baseline);
+      if (want === false) {
+        assert.deepEqual(findings, [
+          [
+            "baseline",
+            "Private vulnerability reporting is off; the security policy points reporters to it. Run apply.mjs settings.",
+          ],
+        ]);
+      } else {
+        assert.deepEqual(kinds(findings), ["token"]);
+        assert.match(findings[0][1], /private vulnerability reporting/);
+      }
+    } finally {
+      stub.restore();
+    }
+  }
+});
+
+test("fetchRepoData: a private or archived repo has no private reporting to read, and no finding for it", async () => {
+  for (const extra of [{ private: true }, { archived: true }]) {
+    const stub = stubFetch([...SETTINGS_ON, ...REPO_ROUTES]);
+    try {
+      const data = await fetchRepoData(
+        { ...META, ...extra },
+        { admin: "admin", read: "read", stacks },
+      );
+      assert.equal(data.baseline.privateReporting, "n/a");
+      assert.ok(!stub.calls.some((call) => /private-vulnerability-reporting/.test(call.path)));
+      assert.deepEqual(checkBaseline(data.baseline), []);
+    } finally {
+      stub.restore();
+    }
+    // Without an admin token it is still n/a, never an unread setting.
+    const plain = stubFetch(REPO_ROUTES);
+    try {
+      const data = await fetchRepoData({ ...META, ...extra }, { admin: "", read: "read", stacks });
+      assert.equal(data.baseline.privateReporting, "n/a");
+    } finally {
+      plain.restore();
+    }
   }
 });
 
