@@ -690,6 +690,51 @@ test("an Astro repo gets astro check; a repo without Biome gets lint and a note"
   assert.match(plan.notes[0], /^lint runs Biome: add @biomejs\/biome/);
 });
 
+// create-vue's layout: a root tsconfig.json that only holds references.
+const REFS = JSON.stringify({ files: [], references: [{ path: "./tsconfig.app.json" }] });
+
+test("a create-vue repo reuses its type-check script instead of a tsc that checks nothing", () => {
+  const manifest = {
+    name: "x",
+    scripts: { lint: "biome ci .", test: "vitest run", "type-check": "vue-tsc --build" },
+    devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" },
+  };
+  const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": REFS });
+  const plan = planFiles(dir, { templates });
+  const edit = plan.files.find((f) => f.action === "edit");
+  assert.equal(edit.detail, "scripts: typecheck");
+  assert.match(edit.content, /"typecheck": "npm run type-check --"/);
+  assert.deepEqual(plan.notes, []);
+});
+
+test("vue-tsc is picked for Vue, and references get --build", () => {
+  const scripts = { lint: "biome ci .", test: "vitest run" };
+  const vue = { name: "x", scripts, devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" } };
+  const plain = { name: "x", scripts, devDependencies: { typescript: "6.0.0" } };
+  const typecheck = (manifest, tsconfig) => {
+    const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": tsconfig });
+    const edit = planFiles(dir, { templates }).files.find((f) => f.action === "edit");
+    return JSON.parse(edit.content).scripts.typecheck;
+  };
+  assert.equal(typecheck(vue, REFS), "vue-tsc --build");
+  assert.equal(typecheck(vue, "{}"), "vue-tsc --noEmit");
+  assert.equal(typecheck(plain, REFS), "tsc --build");
+  assert.equal(typecheck(plain, "{}"), "tsc --noEmit");
+});
+
+test("a lint that rewrites files is an ask, not a keep", () => {
+  const manifest = {
+    name: "x",
+    scripts: { lint: 'run-s "lint:*"', "lint:eslint": "eslint . --fix", test: "vitest run" },
+  };
+  const dir = repo({ "package.json": JSON.stringify(manifest) });
+  const plan = planFiles(dir, { templates });
+  assert.deepEqual(
+    plan.files.filter((f) => f.path === "package.json").map((f) => [f.action, f.detail]),
+    [["ask", 'make "lint:eslint" check-only; the gate fails a lint that rewrites files']],
+  );
+});
+
 test("a module in the exceptions stays off in the caller and is noted with its reason", () => {
   const dir = repo({ "package.json": PKG, "App.slnx": "", "src/App/App.csproj": SQLITE });
   const reason = "Course repo with one solution per week (2026-10-02).";

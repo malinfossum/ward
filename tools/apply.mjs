@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
 import { git } from "./git.mjs";
-import { planSteps } from "./node-contract.mjs";
+import { planSteps, rewritingLint } from "./node-contract.mjs";
 import {
   CODEQL_PINNED,
   exceptionsFor,
@@ -293,16 +293,29 @@ export function listTree(dir, stacks) {
   return (gitFiles(dir) ?? walked()).filter((path) => !ignored(path, stacks.ignore)).sort();
 }
 
+// The type check a repo's own setup calls for. A type-check script (create-vue
+// names it so) is reused rather than copied. vue-tsc is the only checker that
+// reads .vue files. A tsconfig.json with references (the Vite and create-vue
+// layout, often with "files": []) needs --build: without it, tsc checks no
+// files and passes.
+function typecheckFor(deps, scripts, tsconfig) {
+  if ("astro" in deps) return "astro check";
+  if (Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
+  const tool = "vue-tsc" in deps ? "vue-tsc" : "tsc";
+  return /"references"\s*:/.test(tsconfig) ? `${tool} --build` : `${tool} --noEmit`;
+}
+
 const SCRIPT_FOR = {
   lint: () => "biome ci .",
-  typecheck: (deps) => ("astro" in deps ? "astro check" : "tsc --noEmit"),
+  typecheck: typecheckFor,
   "deploy:check": () => "wrangler deploy --dry-run",
 };
 
 // The scripts the node contract requires and package.json lacks, with the
 // standard command for each. test is never guessed: the runner is mine to
 // pick. A note names the package a script needs; nothing is installed here.
-export function missingScripts(pkg, files) {
+// tsconfig is the text of the module's tsconfig.json, "" when it has none.
+export function missingScripts(pkg, files, tsconfig = "") {
   const scripts = pkg.scripts ?? {};
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const { missing } = planSteps({ scripts, files, a11y: "off", hasPlaywright: false });
@@ -310,13 +323,13 @@ export function missingScripts(pkg, files) {
   const ask = [];
   const notes = [];
   for (const name of missing) {
-    if (SCRIPT_FOR[name]) add[name] = SCRIPT_FOR[name](deps);
+    if (SCRIPT_FOR[name]) add[name] = SCRIPT_FOR[name](deps, scripts, tsconfig);
     else ask.push(name);
   }
   if (add.lint && !("@biomejs/biome" in deps)) {
     notes.push("lint runs Biome: add @biomejs/biome as a devDependency and a biome.json first.");
   }
-  if (add.typecheck === "tsc --noEmit" && !("typescript" in deps)) {
+  if (add.typecheck?.startsWith("tsc ") && !("typescript" in deps)) {
     notes.push("typecheck runs tsc: add typescript as a devDependency first.");
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
@@ -577,7 +590,9 @@ export function planFiles(
       const siblings = paths
         .filter((p) => dirOf(p) === inputs.node)
         .map((p) => p.slice(p.lastIndexOf("/") + 1));
-      const { add, ask, notes: scriptNotes } = missingScripts(pkg, siblings);
+      const tsconfigPath = inputs.node === "." ? "tsconfig.json" : `${inputs.node}/tsconfig.json`;
+      const tsconfig = siblings.includes("tsconfig.json") ? read(tsconfigPath) : "";
+      const { add, ask, notes: scriptNotes } = missingScripts(pkg, siblings, tsconfig);
       notes.push(...scriptNotes);
       const names = Object.keys(add);
       if (names.length) {
@@ -588,7 +603,15 @@ export function planFiles(
         const detail = `add a "${name}" script; the runner is yours to choose`;
         files.push({ path: manifest, action: "ask", detail });
       }
-      if (!names.length && !ask.length) files.push({ path: manifest, action: "keep" });
+      // The gate fails these, so say so before the first CI run does.
+      const rewriting = rewritingLint(pkg.scripts ?? {});
+      for (const name of rewriting) {
+        const detail = `make "${name}" check-only; the gate fails a lint that rewrites files`;
+        files.push({ path: manifest, action: "ask", detail });
+      }
+      if (!names.length && !ask.length && !rewriting.length) {
+        files.push({ path: manifest, action: "keep" });
+      }
     }
   }
   return { inputs, ecosystems, uncovered, stops, files, notes };
