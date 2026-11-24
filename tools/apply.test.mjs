@@ -1812,28 +1812,29 @@ test("docs/apply.md documents every command and every output word", () => {
 const OLD = "9987863d40a510af9a27a223d8007a767a0020ad";
 const NEW = "bf47ebacef790cd4847856c10f63b0d3601f1c22";
 
-test("pinToRelease moves both Ward pins and nothing else", () => {
+test("pinToRelease moves both Ward pins and their version comments, and nothing else", () => {
   const text = [
     `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD} # v1.7.1`,
-    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${OLD} # v1.7.1`,
+    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${OLD}`,
     "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
     `      - uses: actions/checkout@${OLD} # v7.0.1`,
   ].join("\n");
-  const pinned = pinToRelease(text, NEW).split("\n");
+  const pinned = pinToRelease(text, { sha: NEW, tag: "v1.10.0" }).split("\n");
   assert.equal(
     pinned[0],
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${NEW} # v1.7.1`,
+    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${NEW} # v1.10.0`,
   );
   assert.equal(
     pinned[1],
-    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${NEW} # v1.7.1`,
+    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${NEW} # v1.10.0`,
+    "a pin with no comment gets one",
   );
   assert.match(pinned[2], /ci\.yml@v1$/);
-  assert.match(pinned[3], new RegExp(`checkout@${OLD}`));
+  assert.equal(pinned[3], `      - uses: actions/checkout@${OLD} # v7.0.1`);
   assert.equal(pinToRelease(text, null), text);
 });
 
-test("releaseCommit is HEAD only where a release tag points at it", () => {
+test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", () => {
   const dir = mkdtempSync(join(tmpdir(), "ward-release-"));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const run = (...args) =>
@@ -1846,10 +1847,15 @@ test("releaseCommit is HEAD only where a release tag points at it", () => {
   assert.equal(releaseCommit(dir), null, "untagged");
   run("tag", "nightly");
   assert.equal(releaseCommit(dir), null, "a tag that is not a release");
-  run("tag", "-a", "v1.8.0", "-m", "v1.8.0");
-  assert.equal(releaseCommit(dir), head, "an annotated release tag");
-  run("tag", "-d", "v1.8.0");
   run("tag", "v1");
-  assert.equal(releaseCommit(dir), head, "the floating major tag");
+  assert.equal(releaseCommit(dir), null, "the floating major tag alone");
+  run("tag", "-a", "v1.9.1", "-m", "v1.9.1");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.9.1" }, "an annotated release tag");
+  run("tag", "v1.10.0");
+  assert.deepEqual(
+    releaseCommit(dir),
+    { sha: head, tag: "v1.10.0" },
+    "the newest of two, by number",
+  );
   assert.equal(releaseCommit(join(dir, "missing")), null, "not a repository");
 });

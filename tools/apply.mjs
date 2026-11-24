@@ -217,21 +217,33 @@ export function renderDependabot(template, ecosystems) {
 // sits on a release tag from tag to tag, and auto-merge trusts only those, but
 // a pin on any other commit tracks main. The template cannot name its own
 // release commit, so it pins the newest release that exists when it changes,
-// and a clone at a release pins to that release's commit instead.
-const WARD_PIN = /(malinfossum\/ward\/\.github\/workflows\/[\w.-]+\.yml@)[0-9a-f]{40}/g;
+// and a clone at a release pins to that release's commit instead, with the
+// release's name as the version comment Dependabot reads and rewrites.
+const WARD_PIN = /(malinfossum\/ward\/\.github\/workflows\/[\w.-]+\.yml@)[0-9a-f]{40}(?: # \S+)?/g;
 
-export function pinToRelease(template, sha) {
-  return sha ? template.replace(WARD_PIN, `$1${sha}`) : template;
+export function pinToRelease(template, release) {
+  return release ? template.replace(WARD_PIN, `$1${release.sha} # ${release.tag}`) : template;
 }
 
-// HEAD's commit when a release tag (v1, or vX.Y.Z) points at it, else null.
+// HEAD's commit and its vX.Y.Z tag when one points at it, else null. The
+// floating v1 alone is not a release: it can sit on a commit no vX.Y.Z names,
+// and Dependabot and auto-merge trust only pins on vX.Y.Z commits. A shallow
+// clone at v1 still gets the vX.Y.Z tag, because git follows tags on HEAD.
 export function releaseCommit(root) {
   const tags = git(root, ["tag", "--points-at", "HEAD"]);
   if (tags.status !== 0) return null;
-  const released = tags.stdout.split(/\r?\n/).some((tag) => /^v\d+(\.\d+\.\d+)?$/.test(tag));
-  if (!released) return null;
+  const version = (tag) => tag.slice(1).split(".").map(Number);
+  const newer = (a, b) => {
+    const [x, y] = [version(a), version(b)];
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+  };
+  const [tag] = tags.stdout
+    .split(/\r?\n/)
+    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .sort((a, b) => newer(b, a));
+  if (!tag) return null;
   const head = git(root, ["rev-parse", "HEAD^{commit}"]);
-  return head.status === 0 ? head.stdout.trim() : null;
+  return head.status === 0 ? { sha: head.stdout.trim(), tag } : null;
 }
 
 export function readTemplates(root = ROOT) {
