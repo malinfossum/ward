@@ -724,6 +724,30 @@ test("vue-tsc is picked for Vue, and references get --build", () => {
   const commented = '{\n  // "references": [{ "path": "./tsconfig.node.json" }]\n}';
   assert.equal(typecheck(plain, commented), "tsc --noEmit");
   assert.equal(typecheck(plain, '{ "references": [] }'), "tsc --noEmit");
+  // "@/*" and "src/**" are strings, not the start of a block comment.
+  const aliased = JSON.stringify({
+    compilerOptions: { paths: { "@/*": ["./src/*"] } },
+    references: [{ path: "./tsconfig.node.json" }],
+    include: ["src/**/*.ts"],
+  });
+  assert.equal(typecheck(plain, aliased), "tsc --build");
+  // A trailing comment neither hides references nor invents them.
+  const trailing = '{ "references": [ // app\n { "path": "./tsconfig.app.json" } ] }';
+  assert.equal(typecheck(plain, trailing), "tsc --build");
+  const invented = '{ "files": [] // "references": [{ "path": "./x.json" }]\n}';
+  assert.equal(typecheck(plain, invented), "tsc --noEmit");
+});
+
+test("a fixing prelint is an ask even when apply adds the lint it hooks", () => {
+  const manifest = { name: "x", scripts: { prelint: "eslint . --fix", test: "vitest run" } };
+  const dir = repo({ "package.json": JSON.stringify(manifest) });
+  const plan = planFiles(dir, { templates });
+  assert.deepEqual(
+    plan.files.filter((f) => f.path === "package.json").map((f) => f.action),
+    ["edit", "ask"],
+  );
+  assert.match(file(plan, "package.json").detail, /scripts: lint/);
+  assert.ok(plan.files.some((f) => f.action === "ask" && /"prelint"/.test(f.detail)));
 });
 
 test("a module in a subfolder reads its own tsconfig.json, and --build comes with a note", () => {

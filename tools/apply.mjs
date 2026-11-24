@@ -306,11 +306,30 @@ function typecheckFor(deps, scripts, tsconfig) {
 }
 
 // tsconfig.json is JSONC: a commented-out "references" line, or an empty
-// list, is no reference. Whole-line and block comments are dropped first; a
-// URL inside a string ("$schema") is not a comment and stays.
+// list, is no reference. Comments go first, skipping strings, so "@/*" and
+// "src/**" in paths and globs are never read as the start of a comment.
 function hasReferences(tsconfig) {
-  const code = tsconfig.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  return /"references"\s*:\s*\[\s*\{/.test(code);
+  return /"references"\s*:\s*\[\s*\{/.test(withoutComments(tsconfig));
+}
+
+function withoutComments(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '"') {
+      const start = i++;
+      while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+      out += text.slice(start, ++i);
+    } else if (text.startsWith("//", i)) {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (text.startsWith("/*", i)) {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+    } else {
+      out += text[i++];
+    }
+  }
+  return out;
 }
 
 const SCRIPT_FOR = {
@@ -342,7 +361,7 @@ export function missingScripts(pkg, files, tsconfig = "") {
   }
   if (add.typecheck?.endsWith(" --build")) {
     notes.push(
-      "typecheck runs --build, which emits for any referenced tsconfig without noEmit: check each sets noEmit (Vite and create-vue do).",
+      'typecheck runs --build, which emits for any tsconfig it builds without noEmit: check the root and each referenced one set noEmit, or the root has "files": [] (Vite and create-vue do).',
     );
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
@@ -617,7 +636,7 @@ export function planFiles(
         files.push({ path: manifest, action: "ask", detail });
       }
       // The gate fails these, so say so before the first CI run does.
-      const fixing = fixingLint(pkg.scripts ?? {});
+      const fixing = fixingLint({ ...pkg.scripts, ...add });
       for (const name of fixing) {
         const detail = `make "${name}" check-only; the gate fails a lint that fixes instead of reporting`;
         files.push({ path: manifest, action: "ask", detail });
