@@ -500,6 +500,22 @@ test("files reads whether the repo is private when GITHUB_TOKEN is set, and neve
   }
 });
 
+test("files stops on an archived repo and writes nothing", async () => {
+  const dir = repo({ "package.json": PKG });
+  const archived = stubFetch([[/^\/repos\/malinfossum\/x$/, 200, { archived: true }]]);
+  try {
+    const args = ["files", "--dir", dir, "--repo", "malinfossum/x", "--apply"];
+    const out = await runApply(args, ENV, { templates });
+    assert.equal(out.exitCode, 1);
+    assert.deepEqual(out.lines, [
+      "stop    This repo is archived, so GitHub refuses every write to it; unarchive it first, then rerun.",
+    ]);
+    assert.ok(!existsSync(join(dir, CALLER)));
+  } finally {
+    archived.restore();
+  }
+});
+
 test("a codeql job that calls something else is drift, never a second codeql key", () => {
   const foreign = caller({ node: "." }).replace(
     /uses: malinfossum\/ward\/\.github\/workflows\/codeql\.yml@\S+/,
@@ -1426,6 +1442,21 @@ test("settings, ruleset and automerge: an archived repo is a stop with no write,
     assert.match(status.lines[0], / private-reporting=n\/a /);
   } finally {
     stub.restore();
+  }
+  // An empty archived repo: its tree answers 409, which must not hide the stop.
+  const empty = stubFetch(
+    bareRoutes([
+      [/^\/repos\/malinfossum\/x$/, 200, { ...META, archived: true }, "GET"],
+      [/\/git\/trees\//, 409, { message: "Git Repository is empty." }, "GET"],
+    ]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.equal(out.exitCode, 1);
+    assert.match(out.lines[0], /^stop {4}This repo is archived/);
+    assert.ok(!empty.calls.some((c) => c.path.includes("/git/trees/")), "meta alone decides");
+  } finally {
+    empty.restore();
   }
 });
 

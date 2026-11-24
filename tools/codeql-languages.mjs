@@ -34,12 +34,10 @@ export function languagesFor(paths, ignore) {
 }
 
 // The files git tracks under dir, split on NUL so a name with a newline in it
-// stays one path. null when git fails there (not a work tree). The buffer is
-// raised from 1 MiB so a large repo's list is never cut short.
+// stays one path. null when git fails there (not a work tree). git() raises
+// the buffer from 1 MiB, so a large repo's list is never cut short.
 export function trackedFiles(dir) {
-  const listed = git(dir, ["ls-files", "-z"], {
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const listed = git(dir, ["ls-files", "-z"]);
   if (listed.status !== 0) return null;
   return listed.stdout.split("\0").filter(Boolean);
 }

@@ -613,9 +613,13 @@ export function writeFiles(dir, plan, written = []) {
 // Everything the settings commands decide on, read with one token that has
 // admin on the repo (locally, gh auth token). The baseline comes from the
 // same reads the audit makes, so what apply sets is what the audit checks.
-export async function readState(repo, token) {
+// metaOnlyIfArchived: a command that writes stops on an archived repo, so it
+// needs nothing past meta there, and a later read (the tree of an empty repo
+// answers 409) must not hide that stop behind an error.
+export async function readState(repo, token, { metaOnlyIfArchived = false } = {}) {
   const meta = (await request(`/repos/${repo}`, token)).body;
   if (!meta) throw new Error(`Cannot read ${repo}; the token must be allowed to see it.`);
+  if (metaOnlyIfArchived && meta.archived === true) return { repo, meta };
   const data = await fetchRepoData(meta, { admin: token, read: token });
   // A private repo without GitHub Advanced Security (any private repo of a
   // personal account on GitHub Free) has no security_and_analysis block, even
@@ -872,6 +876,10 @@ async function attempt(lines, call, what) {
 }
 
 const say = (word, text) => `${word.padEnd(7)} ${text}`;
+
+// An archived repo is read-only: GitHub refuses each write, so none is planned.
+const ARCHIVED =
+  "This repo is archived, so GitHub refuses every write to it; unarchive it first, then rerun.";
 const arg = (argv, flag, fallback = "") => {
   const i = argv.indexOf(flag);
   return i === -1 ? fallback : (argv[i + 1] ?? fallback);
@@ -897,7 +905,13 @@ async function privacyOf(repo, token) {
   if (!repo || !token) return { isPrivate: false, note: "" };
   try {
     const res = await request(`/repos/${repo}`, token);
-    if (res.status === 200) return { isPrivate: res.body?.private === true, note: "" };
+    if (res.status === 200) {
+      return {
+        isPrivate: res.body?.private === true,
+        archived: res.body?.archived === true,
+        note: "",
+      };
+    }
     return {
       isPrivate: false,
       note: `GitHub answered ${res.status} for ${repo}, so the plan assumes a public repo.`,
@@ -914,6 +928,8 @@ async function filesCommand(argv, { stacks, templates, env = {} }) {
   const repo = repoName(argv, dir);
   const exceptions = repo ? exceptionsFor(repo, stacks) : {};
   const privacy = await privacyOf(repo, env.GITHUB_TOKEN || "");
+  // The files would land in a checkout whose push GitHub refuses.
+  if (privacy.archived) return { lines: [say("stop", ARCHIVED)], exitCode: 1 };
   const plan = planFiles(dir, { stacks, templates, exceptions, isPrivate: privacy.isPrivate });
   if (privacy.note) plan.notes.push(privacy.note);
   const lines = [];
@@ -1111,14 +1127,10 @@ export async function runApply(argv, env, deps = {}) {
     return { lines: [say("stop", stop)], exitCode: 1 };
   }
   try {
-    const state = await readState(rest[0], token);
-    if (command === "status") return { lines: [say("status", statusLine(state))], exitCode: 0 };
-    // An archived repo is read-only: GitHub refuses each write, so none is planned.
-    if (state.meta.archived === true) {
-      const stop =
-        "This repo is archived, so GitHub refuses every write to it; unarchive it first, then rerun.";
-      return { lines: [say("stop", stop)], exitCode: 1 };
-    }
+    const status = command === "status";
+    const state = await readState(rest[0], token, { metaOnlyIfArchived: !status });
+    if (status) return { lines: [say("status", statusLine(state))], exitCode: 0 };
+    if (state.meta.archived === true) return { lines: [say("stop", ARCHIVED)], exitCode: 1 };
     if (command === "settings") return await settingsCommand(state, rest, token, stacks);
     if (command === "ruleset") return await rulesetCommand(state, rest, token, templates.ruleset);
     return await automergeCommand(state, rest, token);
