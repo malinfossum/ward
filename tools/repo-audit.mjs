@@ -225,7 +225,7 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
 // never a pass: a false green here would hide exactly what the audit exists
 // to find, and an empty rule list in its place would be a false red. unread
 // is set when no admin token exists for the owner: then that one sentence,
-// naming the missing secret, is the repo's only token finding.
+// naming the missing secret, is the only token finding for its settings.
 // privateReporting is also "n/a" on a private or archived repo, where there is
 // nothing to check. Its read needs only Metadata (read), so on its own an
 // unread value is GitHub not answering, not a token short of Administration.
@@ -269,8 +269,14 @@ export function checkBaseline({
       "CodeQL default setup is on; it blocks the caller's codeql job. Run apply.mjs settings.",
     ]);
   }
-  if (rules == null) unreadable.push("branch rules");
-  else {
+  // The rules go through the read token, so the Administration sentence below
+  // never covers them, not even when no admin token is set.
+  if (rules == null) {
+    findings.push([
+      "token",
+      "GitHub did not answer the branch rules read. It goes through the read token (GITHUB_TOKEN), not the admin one, so rerun before changing a token.",
+    ]);
+  } else {
     const types = new Set(rules.map((rule) => rule.type));
     if (!types.has("pull_request")) {
       findings.push(["ruleset", "The default branch does not require a pull request."]);
@@ -515,7 +521,8 @@ export function auditRepo(
   // A deferral with nothing left to defer is stale, or a later regression of
   // that kind would stay a warning for good. Unread settings give a token
   // finding, never a baseline one, so the baseline key is not judged then:
-  // neither with no admin token nor with one setting unread.
+  // neither with no admin token nor with one setting unread. Unread branch
+  // rules leave the ruleset key unjudged the same way.
   const SETTINGS_FIELDS = [
     "alerts",
     "securityUpdates",
@@ -528,6 +535,7 @@ export function auditRepo(
   for (const kind of DEFERRABLE) {
     if (!exceptions[kind] || findings.some(([found]) => found === kind)) continue;
     if (kind === "baseline" && unknown) continue;
+    if (kind === "ruleset" && baseline?.rules == null) continue;
     deferred.push([
       "exception",
       `A stale deferral for ${kind}: nothing to defer; remove it from stacks.json.`,

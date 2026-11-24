@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { FIRST_PARTY_ACTIONS, RUNTIME_BOUND } from "./automerge.mjs";
+import { git as gitIn } from "./git.mjs";
 import { pinProblems, releaseTags, WARD_PINS } from "./template-pins.mjs";
 
 const read = (path) => readFileSync(path, "utf8");
@@ -108,6 +108,39 @@ test("a template pin passes only on a release tag commit named in its comment", 
   ]);
 });
 
+test("a template pin fails with text after its comment", () => {
+  const lines = [
+    pin(`codeql.yml@${V180} # v1.8.0 (was v1.7.1)`),
+    pin(`codeql.yml@${V180}" # v1.8.0`),
+    `${pin(`codeql.yml@${V180} # v1.8.0`)}  \r`,
+  ];
+  assert.deepEqual(pinProblems(lines.join("\n"), TAGS), [
+    `codeql.yml@${V180} has text after its comment: (was v1.7.1)`,
+    `codeql.yml@${V180} has text after it: " # v1.8.0`,
+  ]);
+});
+
+test("a template pin fails a comment spaced any other way than one space each side", () => {
+  const lines = [
+    `@${V180} #v1.8.0`,
+    `@${V180}\t#\tv1.8.0`,
+    `@${V180}  # v1.8.0`,
+    `@${V180} #  v1.8.0`,
+  ];
+  assert.deepEqual(
+    pinProblems(lines.map((line) => pin(`codeql.yml${line}`)).join("\n"), TAGS),
+    lines.map(() => `codeql.yml@${V180} spaces its comment unlike " # v1.8.0"`),
+  );
+});
+
+test("a template pin on a commit with two release tags must name the newest", () => {
+  const shared = new Map([...TAGS, ["v1.8.1", V180], ["v1.10.0", V180]]);
+  assert.deepEqual(pinProblems(pin(`codeql.yml@${V180} # v1.10.0`), shared), []);
+  assert.deepEqual(pinProblems(pin(`codeql.yml@${V180} # v1.8.1`), shared), [
+    `codeql.yml@${V180} says v1.8.1, but it is v1.10.0`,
+  ]);
+});
+
 test("the caller template pins Ward twice, codeql and automerge", () => {
   const caller = read("templates/ward.yml");
   const files = [...caller.matchAll(WARD_PINS)].map((m) => m[1]);
@@ -117,7 +150,7 @@ test("the caller template pins Ward twice, codeql and automerge", () => {
 test("release tags resolve to commits for annotated and lightweight tags, offline", () => {
   const dir = mkdtempSync(join(tmpdir(), "ward-tags-"));
   const git = (...args) =>
-    spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+    gitIn(dir, ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
       encoding: "utf8",
     });
   try {

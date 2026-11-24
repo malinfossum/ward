@@ -22,7 +22,7 @@ run emails me.
 | `error` | The audit could not read the repo (a GitHub API error); the other repos still report |
 
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see
-`stacks.json`), `exception` (a module kept off on purpose, listed with its reason), `token` (the token cannot read a repo's settings; on my own repos, and on an org
+`stacks.json`), `exception` (a module kept off on purpose, listed with its reason), `token` (the token cannot read a repo's settings, or GitHub did not answer the branch rules read, which goes through the read token; on my own repos, and on an org
 with its own token, this fails the run instead), and whatever `--warn-kinds` names for a run.
 Private repos never enter the sweep: it lists public repos only, since they keep Actions off and sit
 outside the standard.
@@ -58,7 +58,8 @@ touches only the settings endpoints, and if it leaks it can read settings, never
 fine-grained token covers one owner, so `WARD_AUDIT_TOKEN` covers my own repos only, and an org
 gets its settings read only through its own `AUDIT_TOKEN_ROOKDEX` or `AUDIT_TOKEN_WENDHQ`. Without
 one, the audit does not read that org's settings at all: each of its repos gets one `token` warning
-that names the missing secret, and every other check still runs. On my own repos, and on an org that
+that names the missing secret, and every other check still runs. The branch rules go through the
+read token, so a failed rules read adds its own `token` finding beside it. On my own repos, and on an org that
 has its own token, a `token` finding fails the run instead: a missing or expired token must not turn
 the settings checks into a silent pass. The token expires after a year; the Monday after, the audit goes red with a `token`
 finding on every repo of mine, which is the reminder to make a new one.

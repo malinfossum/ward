@@ -6,7 +6,6 @@
 // auto-merge). Every command prints what
 // it would do and changes nothing until --apply. The ward skill in loadout
 // drives it; by hand: node tools/apply.mjs <command>.
-import { spawnSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -19,6 +18,7 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
+import { git } from "./git.mjs";
 import { planSteps } from "./node-contract.mjs";
 import {
   CODEQL_PINNED,
@@ -33,7 +33,7 @@ import {
   WARD,
 } from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
-import { WARD_PINS } from "./template-pins.mjs";
+import { newestRelease, WARD_PINS } from "./template-pins.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const CALLER = ".github/workflows/ward.yml";
@@ -238,7 +238,8 @@ export function pinToRelease(template, release) {
 // for-each-ref prints one tag per line whatever column or sort config is set,
 // and lstrip=2 prints the bare tag name even where a branch shares it. A root
 // that is not the top of its own work tree (Ward unpacked inside another repo)
-// would read that repo's HEAD, so it is no release either.
+// would read that repo's HEAD, so it is no release either; git() drops the
+// GIT_DIR a hook exports, which would make any folder read as that top.
 export function releaseCommit(root) {
   const prefix = git(root, ["rev-parse", "--show-prefix"]);
   if (prefix.status !== 0 || prefix.stdout.trim() !== "") return null;
@@ -250,15 +251,7 @@ export function releaseCommit(root) {
     "refs/tags/v*",
   ]);
   if (tags.status !== 0) return null;
-  const version = (tag) => tag.slice(1).split(".").map(Number);
-  const newer = (a, b) => {
-    const [x, y] = [version(a), version(b)];
-    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
-  };
-  const [tag] = tags.stdout
-    .split(/\r?\n/)
-    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
-    .sort((a, b) => newer(b, a));
+  const tag = newestRelease(tags.stdout.split(/\r?\n/));
   if (!tag) return null;
   const head = git(root, ["rev-parse", "HEAD^{commit}"]);
   return head.status === 0 ? { sha: head.stdout.trim(), tag } : null;
@@ -273,8 +266,6 @@ export function readTemplates(root = ROOT) {
     ruleset: JSON.parse(readFileSync(join(root, "templates", "ruleset.json"), "utf8")),
   };
 }
-
-const git = (dir, args) => spawnSync("git", ["-C", dir, ...args], { encoding: "utf8" });
 
 // Inside a git work tree, the files git knows or would add (tracked, plus
 // untracked that .gitignore does not hide), so an ignored .claude/worktrees
@@ -622,9 +613,13 @@ export function writeFiles(dir, plan, written = []) {
 // Everything the settings commands decide on, read with one token that has
 // admin on the repo (locally, gh auth token). The baseline comes from the
 // same reads the audit makes, so what apply sets is what the audit checks.
-export async function readState(repo, token) {
+// metaOnlyIfArchived: a command that writes stops on an archived repo, so it
+// needs nothing past meta there, and a later read (the tree of an empty repo
+// answers 409) must not hide that stop behind an error.
+export async function readState(repo, token, { metaOnlyIfArchived = false } = {}) {
   const meta = (await request(`/repos/${repo}`, token)).body;
   if (!meta) throw new Error(`Cannot read ${repo}; the token must be allowed to see it.`);
+  if (metaOnlyIfArchived && meta.archived === true) return { repo, meta };
   const data = await fetchRepoData(meta, { admin: token, read: token });
   // A private repo without GitHub Advanced Security (any private repo of a
   // personal account on GitHub Free) has no security_and_analysis block, even
@@ -759,7 +754,7 @@ export function planSettings(
   }
   // The security policy in each owner's .github repo sends reporters to the Security
   // tab's "Report a vulnerability"; this is what makes that button appear.
-  // "n/a" (a private or archived repo) is left alone. It goes last: a refused
+  // "n/a" (a private repo; runApply stops on an archived one first) is left alone. It goes last: a refused
   // write stops the writes after it, and none of the others depend on it.
   if (privateReporting === false) {
     actions.push({
@@ -881,6 +876,10 @@ async function attempt(lines, call, what) {
 }
 
 const say = (word, text) => `${word.padEnd(7)} ${text}`;
+
+// An archived repo is read-only: GitHub refuses each write, so none is planned.
+const ARCHIVED =
+  "This repo is archived, so GitHub refuses every write to it; unarchive it first, then rerun.";
 const arg = (argv, flag, fallback = "") => {
   const i = argv.indexOf(flag);
   return i === -1 ? fallback : (argv[i + 1] ?? fallback);
@@ -895,18 +894,25 @@ export function repoFromRemote(url) {
 function repoName(argv, dir) {
   const named = arg(argv, "--repo");
   if (named) return named;
-  const remote = spawnSync("git", ["-C", dir, "remote", "get-url", "origin"], { encoding: "utf8" });
+  const remote = git(dir, ["remote", "get-url", "origin"]);
   return remote.status === 0 ? repoFromRemote(remote.stdout) : "";
 }
 
-// Whether the repo is private, read with GITHUB_TOKEN when it is set. Without
-// a token, or for a repo GitHub does not show it, files plans as for a public
-// repo, as it did before it could tell; the note says so when the read failed.
+// Whether the repo is private or archived, read with GITHUB_TOKEN when it is
+// set; files stops on an archived one. Without a token, or for a repo GitHub
+// does not show it, files plans as for a public repo that is not archived, as
+// it did before it could tell; the note says so when the read failed.
 async function privacyOf(repo, token) {
   if (!repo || !token) return { isPrivate: false, note: "" };
   try {
     const res = await request(`/repos/${repo}`, token);
-    if (res.status === 200) return { isPrivate: res.body?.private === true, note: "" };
+    if (res.status === 200) {
+      return {
+        isPrivate: res.body?.private === true,
+        archived: res.body?.archived === true,
+        note: "",
+      };
+    }
     return {
       isPrivate: false,
       note: `GitHub answered ${res.status} for ${repo}, so the plan assumes a public repo.`,
@@ -923,6 +929,8 @@ async function filesCommand(argv, { stacks, templates, env = {} }) {
   const repo = repoName(argv, dir);
   const exceptions = repo ? exceptionsFor(repo, stacks) : {};
   const privacy = await privacyOf(repo, env.GITHUB_TOKEN || "");
+  // The files would land in a checkout whose push GitHub refuses.
+  if (privacy.archived) return { lines: [say("stop", ARCHIVED)], exitCode: 1 };
   const plan = planFiles(dir, { stacks, templates, exceptions, isPrivate: privacy.isPrivate });
   if (privacy.note) plan.notes.push(privacy.note);
   const lines = [];
@@ -1120,8 +1128,10 @@ export async function runApply(argv, env, deps = {}) {
     return { lines: [say("stop", stop)], exitCode: 1 };
   }
   try {
-    const state = await readState(rest[0], token);
-    if (command === "status") return { lines: [say("status", statusLine(state))], exitCode: 0 };
+    const status = command === "status";
+    const state = await readState(rest[0], token, { metaOnlyIfArchived: !status });
+    if (status) return { lines: [say("status", statusLine(state))], exitCode: 0 };
+    if (state.meta.archived === true) return { lines: [say("stop", ARCHIVED)], exitCode: 1 };
     if (command === "settings") return await settingsCommand(state, rest, token, stacks);
     if (command === "ruleset") return await rulesetCommand(state, rest, token, templates.ruleset);
     return await automergeCommand(state, rest, token);

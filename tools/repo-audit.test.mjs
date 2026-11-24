@@ -390,10 +390,37 @@ test("a setting the token cannot read is a token warning, not a pass and not a f
     rules: null,
   };
   const findings = checkBaseline(unreadable);
-  assert.deepEqual(kinds(findings), ["token"]);
-  assert.match(findings[0][1], /Administration \(read\)/);
-  assert.match(findings[0][1], /branch rules/);
+  assert.deepEqual(kinds(findings), ["token", "token"]);
+  assert.match(findings[0][1], /branch rules read/);
+  assert.match(findings[1][1], /Administration \(read\)/);
+  assert.doesNotMatch(findings[1][1], /branch rules/);
   assert.ok(WARN_KINDS.has("token"));
+});
+
+// The branch rules go through the read token, never the admin one.
+const RULES_UNREAD =
+  "GitHub did not answer the branch rules read. It goes through the read token (GITHUB_TOKEN), not the admin one, so rerun before changing a token.";
+
+test("unread branch rules are their own token finding, never the Administration sentence", () => {
+  const read = {
+    securityUpdates: { enabled: true, paused: false },
+    alerts: true,
+    analysis: {
+      secret_scanning: { status: "enabled" },
+      secret_scanning_push_protection: { status: "enabled" },
+    },
+    codeScanning: { state: "not-configured" },
+    privateReporting: true,
+    rules: null,
+  };
+  assert.deepEqual(checkBaseline(read), [["token", RULES_UNREAD]]);
+  // Without an admin token the rules are still read, so the missing secret
+  // does not explain them.
+  const unread = "AUDIT_TOKEN_X is not set, so the settings of x/y were not read.";
+  assert.deepEqual(checkBaseline({ rules: null, unread }), [
+    ["token", RULES_UNREAD],
+    ["token", unread],
+  ]);
 });
 
 const PROPS = `<Project>
@@ -1259,6 +1286,9 @@ test("a deferral with nothing left to defer is reported as stale", () => {
   // While there is still something to defer, the key is live, not stale.
   const live = audit({ ...baseline, rules: [] });
   assert.ok(!live.some(([, msg]) => /stale deferral/.test(msg)));
+  // Unread rules give a token finding, so a ruleset key is not judged then.
+  const unreadRules = audit({ ...baseline, rules: null });
+  assert.ok(!unreadRules.some(([, msg]) => /stale deferral/.test(msg)));
   // Unread settings give a token finding, so a baseline key is not judged then.
   const unreadStacks = {
     ...stacks,

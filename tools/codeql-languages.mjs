@@ -4,9 +4,9 @@
 // apply.mjs runs the same function over a checkout before it turns default
 // setup off, so the workflow never scans less than default setup did. Any
 // change here means a new pin for the codeql job in templates/ward.yml.
-import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { git } from "./git.mjs";
 import { ignored, loadStacks } from "./stacks.mjs";
 
 // In output order, after actions, which is always there: every warded repo
@@ -34,13 +34,10 @@ export function languagesFor(paths, ignore) {
 }
 
 // The files git tracks under dir, split on NUL so a name with a newline in it
-// stays one path. null when git fails there (not a work tree). The buffer is
-// raised from 1 MiB so a large repo's list is never cut short.
+// stays one path. null when git fails there (not a work tree). git() raises
+// the buffer from 1 MiB, so a large repo's list is never cut short.
 export function trackedFiles(dir) {
-  const listed = spawnSync("git", ["-C", dir, "ls-files", "-z"], {
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const listed = git(dir, ["ls-files", "-z"]);
   if (listed.status !== 0) return null;
   return listed.stdout.split("\0").filter(Boolean);
 }

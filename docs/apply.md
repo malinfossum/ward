@@ -27,9 +27,11 @@ without a visible `codeql` job it leaves default setup on and says so.
 Private vulnerability reporting puts the "Report a vulnerability" button on a repo's Security tab.
 The security policy each repo inherits from its owner's `.github` repo (`malinfossum/.github` for
 mine) sends reporters there, so `settings` turns it on wherever it reads off. GitHub offers it on
-public repos only, and an archived repo is read-only, so on either it reads `n/a`: never read, never
-set, and never a `stop`. A read that fails is a `note`, never a `stop`: the read needs only Metadata
-(read), so it says nothing about the token, and the other settings still go through.
+public repos only, so on a private repo it reads `n/a`: never read, never set, and never a `stop`.
+A private reporting read that fails is a `note`, never a `stop`: the read needs only Metadata
+(read), so it says nothing about the token, and the other settings still go through. An archived
+repo is read-only: `status` reads private reporting there as `n/a` too, and every other command
+stops before it plans anything (`files` can tell only with `GITHUB_TOKEN` set).
 
 CodeQL runs as the caller's `codeql` job, which calls Ward's `codeql.yml` at a pinned commit, and
 GitHub refuses its uploads while default setup is on. Before it plans default setup off, `settings`
@@ -71,7 +73,7 @@ One line per decision, a word padded to seven characters and then the text:
 | `ask` | A choice that is mine: a `test` script's runner, or `Directory.Build.props` on a repo already on Ward |
 | `note` | A package a new script needs (I install it, the script never does), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo, what a private repo without GHAS goes without, a repo `files` could not read |
 | `warn` | Files of a stack no module covers yet; the covered modules still apply, and the module is the next PR to Ward |
-| `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
+| `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not, an archived repo (every command but `status`; `files` can tell only with `GITHUB_TOKEN` set). Exit 1, nothing written |
 | `wait` | CodeQL has not analyzed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on, or CodeQL default setup that would be turned off |
 | `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |

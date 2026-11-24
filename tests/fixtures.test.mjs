@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+import { git, scrubbed } from "../tools/git.mjs";
 
 const ME = "malinfossum.dev@proton.me";
 
@@ -11,10 +12,12 @@ const ME = "malinfossum.dev@proton.me";
 // NODE_TEST_CONTEXT in this process's environment. A fixture command that
 // itself runs `node --test` (node-ok's own test script, run through
 // node-contract.mjs) would inherit that variable and see a test run already
-// in progress, skip its test files, and exit 0 — making "node-ok passes"
-// vacuous. Strip it so a nested `node --test` actually runs.
+// in progress, skip its test files, and exit 0. That would make "node-ok
+// passes" vacuous, so it is stripped and a nested `node --test` actually runs.
+// A GIT_DIR a hook exported would point identity.mjs at the hook's repo, so
+// git's repo-local variables go too.
 function fixtureEnv(env) {
-  const merged = { ...process.env, ...env };
+  const merged = scrubbed({ ...process.env, ...env });
   delete merged.NODE_TEST_CONTEXT;
   return merged;
 }
@@ -32,10 +35,13 @@ function run(script, args, { cwd, env = {} } = {}) {
 function identity(email, message) {
   const dir = mkdtempSync(join(tmpdir(), "ward-identity-"));
   try {
-    const git = (...args) => execFileSync("git", args, { cwd: dir });
-    git("init", "--quiet");
+    const setup = (...args) => {
+      const result = git(dir, args);
+      assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+    };
+    setup("init", "--quiet");
     const author = ["-c", "user.name=Fixture", "-c", `user.email=${email}`];
-    git(...author, "commit", "--quiet", "--allow-empty", "-m", message);
+    setup(...author, "commit", "--quiet", "--allow-empty", "-m", message);
     const env = { ALLOWED: ME, BASE: "", HEAD: "HEAD", PR_AUTHOR: "", PR_TITLE: "", PR_BODY: "" };
     return run("identity.mjs", [], { cwd: dir, env });
   } finally {
