@@ -48,16 +48,69 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
   return { steps, missing };
 }
 
-// A lint that rewrites files fixes the problem inside the CI runner and then
-// passes, so a fixable error still reaches main. --fix also covers --fix-type
-// and --fix-dangerously; --write and --apply are Biome's and Prettier's.
-const REWRITES = /(?:^|\s)--(?:fix|write|apply)(?!\w)/;
+// Flags that make a linter fix what it finds instead of reporting it: CI then
+// passes with fixable errors still in the committed code. --fix also covers
+// --fix-type, --fix-dangerously and --fix-dry-run (that one writes nothing, but
+// leaves fixable errors out of the exit code); --fix=false is off. --write and
+// --apply are Biome's and Prettier's, and -w is Prettier's short --write.
+const FIXES = /(?:^|\s)--(?:fix|write|apply)(?!\w|=false)|\bprettier\b.*\s-w(?!\S)/;
 
-// The lint scripts that rewrite files: lint itself and every lint:* it may run.
-export function rewritingLint(scripts) {
-  return Object.entries(scripts)
-    .filter(([name, cmd]) => /^lint(:|$)/.test(name) && REWRITES.test(cmd))
-    .map(([name]) => name);
+// A run-s / run-p / npm-run-all pattern as a regex: * matches within one
+// `:` segment, ** across segments.
+function globToRegex(glob) {
+  const body = glob
+    .split("**")
+    .map((part) =>
+      part
+        .split("*")
+        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+        .join("[^:]*"),
+    )
+    .join(".*");
+  return new RegExp(`^${body}$`);
+}
+
+// The scripts a command runs: `npm run x`, `npm run-script x`, and the
+// arguments of run-s, run-p and npm-run-all, up to their `--`.
+function calledScripts(cmd, names) {
+  const called = [];
+  for (const part of cmd.split(/&&|\|\||[;|]/)) {
+    const words = (part.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((w) =>
+      w.replace(/^["']|["']$/g, ""),
+    );
+    for (let i = 0; i < words.length; i++) {
+      if (words[i] === "npm" && (words[i + 1] === "run" || words[i + 1] === "run-script")) {
+        const name = words.slice(i + 2).find((w) => !w.startsWith("-"));
+        if (name) called.push(name);
+      }
+      if (["run-s", "run-p", "npm-run-all"].includes(words[i])) {
+        for (const arg of words.slice(i + 1)) {
+          if (arg === "--") break;
+          if (arg.startsWith("-")) continue;
+          // "build-only {@}": the first word is the script, the rest its arguments.
+          const pattern = globToRegex(arg.split(/\s+/)[0]);
+          called.push(...names.filter((name) => pattern.test(name)));
+        }
+      }
+    }
+  }
+  return called;
+}
+
+// The scripts `npm run lint` reaches that fix instead of report: lint itself,
+// npm's pre and post hooks around each script it runs, and the scripts it
+// calls. A lint:fix helper that lint never runs is not flagged.
+export function fixingLint(scripts) {
+  const names = Object.keys(scripts);
+  const reached = [];
+  const queue = ["lint"];
+  while (queue.length) {
+    const name = queue.shift();
+    if (!Object.hasOwn(scripts, name) || reached.includes(name)) continue;
+    reached.push(name);
+    queue.push(`pre${name}`, `post${name}`, ...calledScripts(scripts[name], names));
+  }
+  return reached.filter((name) => FIXES.test(scripts[name]));
 }
 
 function main() {
@@ -77,9 +130,9 @@ function main() {
     console.log(`::error::package.json has no "${script}" script, which this repo needs`);
     failed++;
   }
-  for (const script of rewritingLint(scripts)) {
+  for (const script of fixingLint(scripts)) {
     console.log(
-      `::error::the "${script}" script rewrites files, so CI fixes the problem in the runner and passes. Make it check-only and move the fixing command to a script outside lint:*, such as "fix"`,
+      `::error::the "${script}" script fixes problems instead of reporting them, so CI passes with fixable errors still in the code. Make it check-only and move the fixing command to a script lint does not run, such as "fix"`,
     );
     failed++;
   }

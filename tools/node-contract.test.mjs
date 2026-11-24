@@ -1,33 +1,55 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { planSteps, rewritingLint } from "./node-contract.mjs";
+import { fixingLint, planSteps } from "./node-contract.mjs";
 
-test("a lint that rewrites files is named, lint:* included", () => {
+test("the lint:* scripts a run-s glob reaches are named when they fix", () => {
   const scripts = {
     lint: 'run-s "lint:*"',
     "lint:oxlint": "oxlint . --fix",
-    "lint:eslint": "eslint . --fix-type problem --cache",
+    "lint:eslint": "eslint . --fix-dry-run --cache",
     "lint:biome": "biome check --write .",
     "lint:old": "biome check --apply",
+    "lint:css:deep": "stylelint --fix", // * stays inside one segment
     fix: "eslint . --fix",
     "format:lint": "prettier --write .",
   };
-  assert.deepEqual(rewritingLint(scripts), [
-    "lint:oxlint",
-    "lint:eslint",
-    "lint:biome",
-    "lint:old",
-  ]);
+  assert.deepEqual(fixingLint(scripts), ["lint:oxlint", "lint:eslint", "lint:biome", "lint:old"]);
 });
 
-test("a check-only lint passes, and a flag that only starts with fix is no rewrite", () => {
+test("a lint:fix helper that lint never runs is not flagged", () => {
+  const scripts = { lint: "eslint .", "lint:fix": "eslint . --fix" };
+  assert.deepEqual(fixingLint(scripts), []);
+});
+
+test("npm's pre and post hooks and npm run chains count", () => {
   const scripts = {
-    lint: "biome ci .",
-    "lint:eslint": "eslint . --cache",
+    prelint: "eslint . --fix",
+    lint: "npm run --silent format && eslint .",
+    format: "prettier -w .",
+    postformat: "biome format --write .",
+    postlint: "echo done",
+  };
+  assert.deepEqual(fixingLint(scripts), ["prelint", "format", "postformat"]);
+});
+
+test("run-p with arguments and --, and ** across segments", () => {
+  const scripts = {
+    lint: 'run-p "lint:** {@}" --',
+    "lint:css:deep": "stylelint --fix",
+    "lint:js": "eslint .",
+  };
+  assert.deepEqual(fixingLint(scripts), ["lint:css:deep"]);
+});
+
+test("a check-only lint passes, and look-alike flags are no fix", () => {
+  const scripts = {
+    lint: 'run-s "lint:*"',
+    "lint:eslint": "eslint . --cache --fix=false",
     "lint:fixtures": "node check.mjs --fixtures",
     "lint:fixed": "tool --fixed-width",
+    "lint:watch": "tsc -w",
   };
-  assert.deepEqual(rewritingLint(scripts), []);
+  assert.deepEqual(fixingLint(scripts), []);
 });
 
 const base = {

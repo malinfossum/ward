@@ -116,9 +116,9 @@ const REJECTS = {
       expect: /no "test:a11y" script/,
     },
     {
-      name: "node-lint-fix: a lint that passes only because it rewrites files",
+      name: "node-lint-fix: a lint that passes only because it fixes instead of reporting",
       run: () => run("node-contract.mjs", ["fixtures/node-lint-fix"]),
-      expect: /::error::the "lint" script rewrites files/,
+      expect: /::error::the "lint" script fixes problems instead of reporting them/,
     },
   ],
   dotnet: [
