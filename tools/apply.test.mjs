@@ -1822,6 +1822,7 @@ test("pinToRelease moves both Ward pins and their version comments, and nothing 
     `      - uses: actions/checkout@${OLD} # v7.0.1`,
     `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD}`,
     "    # v1.7.1 stays: a comment on the next line is not the pin's",
+    `    uses: "malinfossum/ward/.github/workflows/codeql.yml@${OLD}"`,
   ].join("\n");
   const pinned = pinToRelease(text, { sha: NEW, tag: "v1.10.0" }).split("\n");
   const moved = (file) => `    uses: malinfossum/ward/.github/workflows/${file}@${NEW} # v1.10.0`;
@@ -1832,6 +1833,11 @@ test("pinToRelease moves both Ward pins and their version comments, and nothing 
   assert.equal(pinned[4], `      - uses: actions/checkout@${OLD} # v7.0.1`);
   assert.equal(pinned[5], moved("codeql.yml"));
   assert.equal(pinned[6], "    # v1.7.1 stays: a comment on the next line is not the pin's");
+  assert.equal(
+    pinned[7],
+    `    uses: "malinfossum/ward/.github/workflows/codeql.yml@${NEW}"`,
+    "a pin inside quotes moves its SHA only",
+  );
   assert.equal(pinToRelease(text, null), text);
 });
 
@@ -1858,11 +1864,16 @@ test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", 
   // A text sort would pick v1.9.1: only a sort by number picks v1.10.0.
   run("tag", "v1.10.0");
   assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "the newest by number");
-  // A column config puts git tag's whole list on one line; the reader ignores it.
   run("config", "column.ui", "always");
-  assert.equal(run("tag", "--points-at", "HEAD").stdout.trim().split(/\r?\n/).length, 1);
   assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "under column.ui=always");
+  run("config", "--unset", "column.ui");
+  // A branch of the same name makes the short ref name tags/v1.10.0.
+  run("branch", "v1.10.0");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "beside a same-named branch");
+  run("branch", "-D", "v1.10.0");
   assert.equal(releaseCommit(join(dir, "missing")), null, "not a repository");
+  mkdirSync(join(dir, "unpacked"));
+  assert.equal(releaseCommit(join(dir, "unpacked")), null, "a folder inside another repo");
 
   // The ward skill's clone: shallow, at v1. git follows the tags on HEAD.
   const clone = join(dir, "clone");

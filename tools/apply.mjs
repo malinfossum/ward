@@ -219,26 +219,37 @@ export function renderDependabot(template, ecosystems) {
 // a pin on any other commit tracks main. The template cannot name its own
 // release commit, so it pins the newest release that exists when it changes,
 // and a clone at a release pins to that release's commit instead, with the
-// release's name as the version comment Dependabot reads and rewrites.
+// release's name as the version comment Dependabot reads and rewrites. Only a
+// pin that ends its line gets the comment: anything after it (a closing quote,
+// another tool's comment) stays as it was, and only the SHA moves.
 export function pinToRelease(template, release) {
   if (!release) return template;
-  return template.replace(
-    WARD_PINS,
-    (_, file) => `malinfossum/ward/.github/workflows/${file}@${release.sha} # ${release.tag}`,
-  );
+  return template.replace(WARD_PINS, (pin, file, ...rest) => {
+    const [offset, text] = rest.slice(-2);
+    const next = text[offset + pin.length];
+    if (next !== undefined && next !== "\n" && next !== "\r") {
+      return pin.replace(/@[0-9a-f]{40}/, `@${release.sha}`);
+    }
+    return `malinfossum/ward/.github/workflows/${file}@${release.sha} # ${release.tag}`;
+  });
 }
 
 // HEAD's commit and its vX.Y.Z tag when one points at it, else null. The
 // floating v1 alone is not a release: it can sit on a commit no vX.Y.Z names,
 // and Dependabot and auto-merge trust only pins on vX.Y.Z commits. A shallow
 // clone at v1 still gets the vX.Y.Z tag, because git follows tags on HEAD.
-// for-each-ref prints one tag per line whatever column or sort config is set.
+// for-each-ref prints one tag per line whatever column or sort config is set,
+// and lstrip=2 prints the bare tag name even where a branch shares it. A root
+// that is not the top of its own work tree (Ward unpacked inside another repo)
+// would read that repo's HEAD, so it is no release either.
 export function releaseCommit(root) {
+  const prefix = git(root, ["rev-parse", "--show-prefix"]);
+  if (prefix.status !== 0 || prefix.stdout.trim() !== "") return null;
   const tags = git(root, [
     "for-each-ref",
     "--points-at",
     "HEAD",
-    "--format=%(refname:short)",
+    "--format=%(refname:lstrip=2)",
     "refs/tags/v*",
   ]);
   if (tags.status !== 0) return null;

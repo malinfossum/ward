@@ -21,7 +21,7 @@ export function releaseTags(dir) {
       "-C",
       dir,
       "for-each-ref",
-      "--format=%(refname:short) %(objectname) %(*objectname)",
+      "--format=%(refname:lstrip=2) %(objectname) %(*objectname)",
       "refs/tags/v*",
     ],
     { encoding: "utf8" },
