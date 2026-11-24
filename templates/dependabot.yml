@@ -1,6 +1,8 @@
 # Ward baseline. Keep the blocks for ecosystems this repo uses; delete the rest.
-# Majors are never grouped, so each gets its own PR for me to read. A block waits
-# 21 days before it proposes a major, so a broken x.0.0 is fixed by then.
+# Majors are never grouped, so each gets its own PR for me to read. Ward's own
+# two pins are the one exception: they must move together, majors included, and
+# the Ward release tag is my review. A block waits 21 days before it proposes a
+# major, so a broken x.0.0 is fixed by then.
 # Dependabot can't tell a major apart for Actions or Docker, so those two keep its
 # default wait of 3 days for every update.
 version: 2
