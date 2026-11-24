@@ -33,6 +33,7 @@ import {
   WARD,
 } from "./repo-audit.mjs";
 import { detectStacks, ignored, loadStacks } from "./stacks.mjs";
+import { WARD_PINS } from "./template-pins.mjs";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const CALLER = ".github/workflows/ward.yml";
@@ -217,21 +218,50 @@ export function renderDependabot(template, ecosystems) {
 // sits on a release tag from tag to tag, and auto-merge trusts only those, but
 // a pin on any other commit tracks main. The template cannot name its own
 // release commit, so it pins the newest release that exists when it changes,
-// and a clone at a release pins to that release's commit instead.
-const WARD_PIN = /(malinfossum\/ward\/\.github\/workflows\/[\w.-]+\.yml@)[0-9a-f]{40}/g;
-
-export function pinToRelease(template, sha) {
-  return sha ? template.replace(WARD_PIN, `$1${sha}`) : template;
+// and a clone at a release pins to that release's commit instead, with the
+// release's name as the version comment Dependabot reads and rewrites. The
+// pins check holds the template to `@<sha> # vX.Y.Z`; a pin in any other shape
+// moves its SHA only and keeps whatever follows it.
+export function pinToRelease(template, release) {
+  if (!release) return template;
+  return template.replace(WARD_PINS, (pin, _file, sha, comment) => {
+    const moved = pin.replace(sha, release.sha);
+    if (!/^v\d+\.\d+\.\d+$/.test(comment ?? "")) return moved;
+    return moved.replace(/#[ \t]*\S+$/, `# ${release.tag}`);
+  });
 }
 
-// HEAD's commit when a release tag (v1, or vX.Y.Z) points at it, else null.
+// HEAD's commit and its vX.Y.Z tag when one points at it, else null. The
+// floating v1 alone is not a release: it can sit on a commit no vX.Y.Z names,
+// and Dependabot and auto-merge trust only pins on vX.Y.Z commits. A shallow
+// clone at v1 still gets the vX.Y.Z tag, because git follows tags on HEAD.
+// for-each-ref prints one tag per line whatever column or sort config is set,
+// and lstrip=2 prints the bare tag name even where a branch shares it. A root
+// that is not the top of its own work tree (Ward unpacked inside another repo)
+// would read that repo's HEAD, so it is no release either.
 export function releaseCommit(root) {
-  const tags = git(root, ["tag", "--points-at", "HEAD"]);
+  const prefix = git(root, ["rev-parse", "--show-prefix"]);
+  if (prefix.status !== 0 || prefix.stdout.trim() !== "") return null;
+  const tags = git(root, [
+    "for-each-ref",
+    "--points-at",
+    "HEAD",
+    "--format=%(refname:lstrip=2)",
+    "refs/tags/v*",
+  ]);
   if (tags.status !== 0) return null;
-  const released = tags.stdout.split(/\r?\n/).some((tag) => /^v\d+(\.\d+\.\d+)?$/.test(tag));
-  if (!released) return null;
+  const version = (tag) => tag.slice(1).split(".").map(Number);
+  const newer = (a, b) => {
+    const [x, y] = [version(a), version(b)];
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+  };
+  const [tag] = tags.stdout
+    .split(/\r?\n/)
+    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    .sort((a, b) => newer(b, a));
+  if (!tag) return null;
   const head = git(root, ["rev-parse", "HEAD^{commit}"]);
-  return head.status === 0 ? head.stdout.trim() : null;
+  return head.status === 0 ? { sha: head.stdout.trim(), tag } : null;
 }
 
 export function readTemplates(root = ROOT) {

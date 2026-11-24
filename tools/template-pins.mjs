@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 export const WARD_PINS =
-  /malinfossum\/ward\/\.github\/workflows\/([\w.-]+\.yml)@([0-9a-f]{40})(?: # (\S+))?/g;
+  /(?<![\w.-])malinfossum\/ward\/\.github\/workflows\/([\w.-]+\.yml)@([0-9a-f]{40})(?:[ \t]+#[ \t]*(\S+))?/g;
 
 // Maps each vX.Y.Z tag to its commit. %(*objectname) is the commit an annotated
 // tag points at; a lightweight tag leaves it empty and names the commit itself.
@@ -21,7 +21,7 @@ export function releaseTags(dir) {
       "-C",
       dir,
       "for-each-ref",
-      "--format=%(refname:short) %(objectname) %(*objectname)",
+      "--format=%(refname:lstrip=2) %(objectname) %(*objectname)",
       "refs/tags/v*",
     ],
     { encoding: "utf8" },

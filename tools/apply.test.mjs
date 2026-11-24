@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import {
   addCodeqlJob,
   CALLER,
@@ -1812,28 +1813,45 @@ test("docs/apply.md documents every command and every output word", () => {
 const OLD = "9987863d40a510af9a27a223d8007a767a0020ad";
 const NEW = "bf47ebacef790cd4847856c10f63b0d3601f1c22";
 
-test("pinToRelease moves both Ward pins and nothing else", () => {
-  const text = [
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD} # v1.7.1`,
-    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${OLD} # v1.7.1`,
-    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
-    `      - uses: actions/checkout@${OLD} # v7.0.1`,
-  ].join("\n");
-  const pinned = pinToRelease(text, NEW).split("\n");
-  assert.equal(
-    pinned[0],
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${NEW} # v1.7.1`,
-  );
-  assert.equal(
-    pinned[1],
-    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${NEW} # v1.7.1`,
-  );
-  assert.match(pinned[2], /ci\.yml@v1$/);
-  assert.match(pinned[3], new RegExp(`checkout@${OLD}`));
+test("pinToRelease moves Ward pins and their vX.Y.Z comments, and nothing else", () => {
+  const w = "malinfossum/ward/.github/workflows";
+  // [template line, the line a clone at v1.10.0 writes]
+  const cases = [
+    [`    uses: ${w}/codeql.yml@${OLD} # v1.7.1`, `    uses: ${w}/codeql.yml@${NEW} # v1.10.0`],
+    [
+      `    uses: ${w}/dependabot-automerge.yml@${OLD} # v1.7.1`,
+      `    uses: ${w}/dependabot-automerge.yml@${NEW} # v1.10.0`,
+    ],
+    [
+      `    uses: ${w}/codeql.yml@${OLD}  #v1.7.1  `,
+      `    uses: ${w}/codeql.yml@${NEW}  # v1.10.0  `,
+    ],
+    [
+      `    uses: ${w}/codeql.yml@${OLD} # v1.7.1 # keep`,
+      `    uses: ${w}/codeql.yml@${NEW} # v1.10.0 # keep`,
+    ],
+    // Shapes the pins check rejects: the SHA moves, nothing else changes.
+    [`    uses: ${w}/codeql.yml@${OLD}`, `    uses: ${w}/codeql.yml@${NEW}`],
+    [`    uses: ${w}/codeql.yml@${OLD} # keep`, `    uses: ${w}/codeql.yml@${NEW} # keep`],
+    [`    uses: "${w}/codeql.yml@${OLD}" # v1.7.1`, `    uses: "${w}/codeql.yml@${NEW}" # v1.7.1`],
+    // Not Ward's pins.
+    [`    uses: ${w}/ci.yml@v1`, `    uses: ${w}/ci.yml@v1`],
+    [
+      `      - uses: actions/checkout@${OLD} # v7.0.1`,
+      `      - uses: actions/checkout@${OLD} # v7.0.1`,
+    ],
+    [
+      `    uses: not${w}/codeql.yml@${OLD} # v1.7.1`,
+      `    uses: not${w}/codeql.yml@${OLD} # v1.7.1`,
+    ],
+  ];
+  const text = cases.map(([line]) => line).join("\n");
+  const pinned = pinToRelease(text, { sha: NEW, tag: "v1.10.0" }).split("\n");
+  for (const [i, [line, want]] of cases.entries()) assert.equal(pinned[i], want, line);
   assert.equal(pinToRelease(text, null), text);
 });
 
-test("releaseCommit is HEAD only where a release tag points at it", () => {
+test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", () => {
   const dir = mkdtempSync(join(tmpdir(), "ward-release-"));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const run = (...args) =>
@@ -1846,10 +1864,34 @@ test("releaseCommit is HEAD only where a release tag points at it", () => {
   assert.equal(releaseCommit(dir), null, "untagged");
   run("tag", "nightly");
   assert.equal(releaseCommit(dir), null, "a tag that is not a release");
-  run("tag", "-a", "v1.8.0", "-m", "v1.8.0");
-  assert.equal(releaseCommit(dir), head, "an annotated release tag");
-  run("tag", "-d", "v1.8.0");
   run("tag", "v1");
-  assert.equal(releaseCommit(dir), head, "the floating major tag");
+  assert.equal(releaseCommit(dir), null, "the floating major tag alone");
+  run("tag", "-a", "v1.9.0", "-m", "v1.9.0");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.9.0" }, "an annotated release tag");
+  // Listed in byte order, v1.9.0 comes first: only a sort picks v1.9.1.
+  run("tag", "v1.9.1");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.9.1" }, "the newest, not the first");
+  // A text sort would pick v1.9.1: only a sort by number picks v1.10.0.
+  run("tag", "v1.10.0");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "the newest by number");
+  run("config", "column.ui", "always");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "under column.ui=always");
+  run("config", "--unset", "column.ui");
+  // A branch of the same name makes the short ref name tags/v1.10.0.
+  run("branch", "v1.10.0");
+  assert.deepEqual(releaseCommit(dir), { sha: head, tag: "v1.10.0" }, "beside a same-named branch");
+  run("branch", "-D", "v1.10.0");
   assert.equal(releaseCommit(join(dir, "missing")), null, "not a repository");
+  mkdirSync(join(dir, "unpacked"));
+  assert.equal(releaseCommit(join(dir, "unpacked")), null, "a folder inside another repo");
+
+  // The ward skill's clone: shallow, at v1. git follows the tags on HEAD.
+  const clone = join(dir, "clone");
+  const cloned = spawnSync(
+    "git",
+    ["clone", "-q", "--depth", "1", "--branch", "v1", pathToFileURL(dir).href, clone],
+    { encoding: "utf8" },
+  );
+  assert.equal(cloned.status, 0, cloned.stderr);
+  assert.deepEqual(releaseCommit(clone), { sha: head, tag: "v1.10.0" }, "a shallow clone at v1");
 });
