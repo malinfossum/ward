@@ -160,6 +160,7 @@ instead of burning runner time. Every module runs with .NET, Astro and Wrangler 
 | Dependabot security updates | Known-vulnerable dependencies | Repo setting |
 | Dependabot version updates, weekly, grouped | Drift that turns into a painful major jump; stale pinned actions | `dependabot.yml` from `templates/` |
 | Secret scanning + push protection | A credential pushed by mistake — blocked before it lands | Repo setting |
+| Private vulnerability reporting | A vulnerability reported in a public issue before a fix exists | Repo setting; the policy in `malinfossum/.github` points to it |
 | CodeQL default setup + Copilot Autofix | Injection, XSS, unsafe deserialisation, workflow script injection (the `actions` language); Autofix proposes the patch on the PR | Repo setting |
 | Ruleset on `main` | Merging red, force-pushing, deleting `main` | `templates/ruleset.json` via API |
 | `identity` job | Commits authored as anyone but me or Dependabot; `Co-Authored-By` / `Claude-Session` / "Generated with" trailers; a PR that changes the files deciding what Ward checks (warning) | `identity` job in `ci.yml`, always on |
@@ -401,7 +402,7 @@ it works, it joins the `dotnet` module; if not, the fallback is UI Automation te
    framework lands in a repo.
 2. **Unknown stack.** When a detection finds files no rule covers, the skill applies the covered modules, says so in a warning, and drafts the new module as a PR to Ward as its last step; it never applies a guessed config. Capacitor Android is the first expected case.
 3. **The audit.** The weekly `repo-audit` adds three checks per repo: baseline settings on (Dependabot,
-   secret scanning, CodeQL, ruleset), caller present on `@v1`, and no uncovered stack. It compares the
+   secret scanning, private vulnerability reporting, CodeQL, ruleset), caller present on `@v1`, and no uncovered stack. It compares the
    caller's inputs on `main` with what the repo's stacks need, so a merged PR that turned a module off
    shows up, and it lists every `NuGetAuditSuppress` with its dated reason. It also reports runtimes near
    end of life — .NET 8 and 9 end on 2026-11-10.
@@ -505,7 +506,7 @@ Can every part of the circle be tested? Yes, with one link that sits outside Git
 - The ruleset's "require code scanning results" rule was not in the 2026-09-25 verification pass;
   confirm it is free on public repos before step 1 relies on it. On Ward itself it is not applied
   yet: CodeQL default setup finds no languages while `main` holds only docs, so the rule would block
-  the first code PR forever. I add it once CodeQL has analysed `main` after that merge. A repo with
+  the first code PR forever. I add it once CodeQL has analyzed `main` after that merge. A repo with
   code already on `main` gets the rule from day one.
 - Publishing `@malinfossum/ward-a11y` to npm is a gated step I do or approve at the time.
 

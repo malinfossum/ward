@@ -864,9 +864,11 @@ const READS = [
   [/\/rulesets$/, 200, []],
   [/\/code-scanning\/analyses/, 404],
   [/\/pulls\?/, 200, []],
+  [/\/private-vulnerability-reporting$/, 200, { enabled: false }],
 ].map(([pattern, status, body]) => [pattern, status, body, "GET"]);
 const WRITES = [
   [/\/(vulnerability-alerts|automated-security-fixes)$/, 204, undefined, "PUT"],
+  [/\/private-vulnerability-reporting$/, 204, undefined, "PUT"],
   [/^\/repos\/malinfossum\/x$/, 200, {}, "PATCH"],
   [/\/code-scanning\/default-setup$/, 202, {}, "PATCH"],
 ];
@@ -890,7 +892,7 @@ test("request sends a JSON body with the method and the token", async () => {
   }
 });
 
-test("settings: plans the four changes a bare repo needs and makes them only with --apply", async () => {
+test("settings: plans the five changes a bare repo needs and makes them only with --apply", async () => {
   const stub = stubFetch(bareRoutes());
   try {
     const dry = await runApply(["settings", "malinfossum/x"], ENV);
@@ -902,6 +904,7 @@ test("settings: plans the four changes a bare repo needs and makes them only wit
         "Dependabot security updates on",
         "secret scanning and push protection on",
         "delete merged branches on",
+        "private vulnerability reporting on",
       ],
     );
     assert.deepEqual(stub.writes(), []);
@@ -911,13 +914,14 @@ test("settings: plans the four changes a bare repo needs and makes them only wit
       ["PUT", "/repos/malinfossum/x/automated-security-fixes"],
       ["PATCH", "/repos/malinfossum/x"],
       ["PATCH", "/repos/malinfossum/x"],
+      ["PUT", "/repos/malinfossum/x/private-vulnerability-reporting"],
     ]);
     const patches = stub.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
     assert.deepEqual(patches, [
       { security_and_analysis: { secret_scanning: ON, secret_scanning_push_protection: ON } },
       { delete_branch_on_merge: true },
     ]);
-    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 4);
+    assert.equal(wet.lines.filter((l) => l.startsWith("done")).length, 5);
     assert.ok(stub.calls.every((c) => c.auth === "Bearer t"));
   } finally {
     stub.restore();
@@ -940,6 +944,7 @@ test("settings: everything on is kept; a setting the token cannot read is a stop
         200,
         { state: "not-configured", languages: ["javascript"] },
       ],
+      [/\/private-vulnerability-reporting$/, 200, { enabled: true }],
     ]),
   );
   try {
@@ -998,6 +1003,7 @@ test("settings: a refused write (403) is an error, not done, and stops the rest"
         "set     Dependabot security updates on",
         "set     secret scanning and push protection on",
         "set     delete merged branches on",
+        "set     private vulnerability reporting on",
         "done    Dependabot alerts on",
         "error   Dependabot security updates on 403",
       ],
@@ -1050,6 +1056,7 @@ const settled = (overrides) =>
     [/^\/repos\/malinfossum\/x$/, 200, SET_ON, "GET"],
     [/\/automated-security-fixes$/, 200, { enabled: true, paused: false }, "GET"],
     [/\/vulnerability-alerts$/, 204, undefined, "GET"],
+    [/\/private-vulnerability-reporting$/, 200, { enabled: true }, "GET"],
   ]);
 const defaultSetupOn = (languages) => [
   /\/code-scanning\/default-setup$/,
@@ -1255,6 +1262,7 @@ const SETTLED = {
   alerts: true,
   securityUpdates: { enabled: true, paused: false },
   analysis: { secret_scanning: ON, secret_scanning_push_protection: ON },
+  privateReporting: true,
 };
 
 test("planSettings: javascript and typescript fold into one; a language outside the table stops", () => {
@@ -1326,6 +1334,7 @@ test("planSettings: a private repo without GHAS gets Dependabot and merged branc
     securityUpdates: { enabled: false, paused: false },
     analysis: null,
     codeScanning: null,
+    privateReporting: "n/a",
   };
   const plan = planSettings(bare, {
     isPrivate: true,
@@ -1348,6 +1357,64 @@ test("planSettings: a private repo without GHAS gets Dependabot and merged branc
     planSettings({ ...bare, alerts: null }, { isPrivate: true, withoutGhas: true }).stops,
     ["The token cannot read this repo's settings; it needs admin on the repo."],
   );
+});
+
+test("planSettings: private reporting goes on only when read off; n/a is left alone, unread is a note", () => {
+  const settled = { ...SETTLED, codeScanning: { state: "not-configured", languages: [] } };
+  assert.deepEqual(planSettings({ ...settled, privateReporting: false }).actions, [
+    {
+      what: "private vulnerability reporting on",
+      method: "PUT",
+      path: "/private-vulnerability-reporting",
+    },
+  ]);
+  assert.deepEqual(planSettings(settled).actions, []);
+  assert.deepEqual(planSettings({ ...settled, privateReporting: "n/a" }), {
+    stops: [],
+    actions: [],
+    notes: [],
+  });
+  // An unread value never blocks the settings the token can read and set.
+  for (const unread of [null, undefined]) {
+    assert.deepEqual(planSettings({ ...settled, alerts: false, privateReporting: unread }), {
+      stops: [],
+      actions: [{ what: "Dependabot alerts on", method: "PUT", path: "/vulnerability-alerts" }],
+      notes: [
+        "GitHub did not answer the private vulnerability reporting read, so it is left as it is; rerun settings.",
+      ],
+    });
+  }
+});
+
+test("planSettings: the private reporting write goes last, after CodeQL default setup off", () => {
+  const plan = planSettings(
+    {
+      ...SETTLED,
+      privateReporting: false,
+      codeScanning: { state: "configured", languages: ["actions"] },
+    },
+    { job: true, languages: ["actions"], deleteBranchOnMerge: false },
+  );
+  assert.deepEqual(
+    plan.actions.map((a) => a.what),
+    ["delete merged branches on", "CodeQL default setup off", "private vulnerability reporting on"],
+  );
+});
+
+test("settings and status: an archived repo reads private reporting as n/a and never writes it", async () => {
+  const stub = stubFetch(
+    bareRoutes([[/^\/repos\/malinfossum\/x$/, 200, { ...META, archived: true }, "GET"]]),
+  );
+  try {
+    const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
+    assert.ok(!out.lines.some((l) => l.includes("private vulnerability reporting")));
+    assert.ok(!stub.writes().some(([, path]) => path.endsWith("/private-vulnerability-reporting")));
+    assert.ok(!stub.calls.some((c) => c.path.endsWith("/private-vulnerability-reporting")));
+    const status = await runApply(["status", "malinfossum/x"], ENV);
+    assert.match(status.lines[0], / private-reporting=n\/a /);
+  } finally {
+    stub.restore();
+  }
 });
 
 // A private repo of a personal account on GitHub Free, read with an admin token.
@@ -1425,7 +1492,7 @@ test("status prints one line with the state, and readState sees classic protecti
     assert.equal(state.analysed, false);
     assert.equal(
       statusLine(state),
-      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
+      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled private-reporting=false default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
     );
     const { lines } = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(lines[0], `status  ${statusLine(state)}`);

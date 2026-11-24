@@ -654,7 +654,9 @@ export function planSettings(
   baseline,
   { job = false, languages = [], isPrivate = false, withoutGhas = false, deleteBranchOnMerge } = {},
 ) {
-  const { alerts, securityUpdates, analysis, codeScanning } = baseline;
+  const { alerts, securityUpdates, analysis, codeScanning, privateReporting } = baseline;
+  // privateReporting stays out: its read needs only Metadata (read), so an
+  // unread value says nothing about the token, and the rest can still be set.
   const needed = withoutGhas
     ? [alerts, securityUpdates]
     : [alerts, securityUpdates, analysis, codeScanning];
@@ -725,6 +727,21 @@ export function planSettings(
       }
     }
   }
+  // The security policy in each owner's .github repo sends reporters to the Security
+  // tab's "Report a vulnerability"; this is what makes that button appear.
+  // "n/a" (a private or archived repo) is left alone. It goes last: a refused
+  // write stops the writes after it, and none of the others depend on it.
+  if (privateReporting === false) {
+    actions.push({
+      what: "private vulnerability reporting on",
+      method: "PUT",
+      path: "/private-vulnerability-reporting",
+    });
+  } else if (privateReporting == null) {
+    notes.push(
+      "GitHub did not answer the private vulnerability reporting read, so it is left as it is; rerun settings.",
+    );
+  }
   if (withoutGhas) {
     notes.push(
       "This repo is private without GitHub Advanced Security: secret scanning, push protection and CodeQL need GHAS, and a ruleset needs GitHub Pro, so they stay off. Leave the codeql job out of its caller.",
@@ -747,6 +764,7 @@ export function statusLine(state) {
     `delete-branch=${state.meta.delete_branch_on_merge ?? "unread"}`,
     `secret-scanning=${analysis.secret_scanning?.status ?? "unread"}`,
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
+    `private-reporting=${state.baseline.privateReporting ?? "unread"}`,
     `default-setup=${state.baseline.codeScanning?.state ?? "unread"}`,
     `analysed=${state.analysed}`,
     `rulesets=${state.rulesetsRead ? state.rulesets.length : "unread"}${state.classic ? "+classic" : ""}`,

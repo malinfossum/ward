@@ -226,7 +226,18 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
 // to find, and an empty rule list in its place would be a false red. unread
 // is set when no admin token exists for the owner: then that one sentence,
 // naming the missing secret, is the repo's only token finding.
-export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning, rules, unread }) {
+// privateReporting is also "n/a" on a private or archived repo, where there is
+// nothing to check. Its read needs only Metadata (read), so on its own an
+// unread value is GitHub not answering, not a token short of Administration.
+export function checkBaseline({
+  securityUpdates,
+  alerts,
+  analysis,
+  codeScanning,
+  privateReporting,
+  rules,
+  unread,
+}) {
   const findings = [];
   const unreadable = [];
   if (alerts == null) unreadable.push("Dependabot alerts");
@@ -243,6 +254,12 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
     if (analysis.secret_scanning_push_protection?.status !== "enabled") {
       findings.push(["baseline", "Push protection is off."]);
     }
+  }
+  if (privateReporting === false) {
+    findings.push([
+      "baseline",
+      "Private vulnerability reporting is off; the security policy points reporters to it. Run apply.mjs settings.",
+    ]);
   }
   if (codeScanning == null) unreadable.push("CodeQL default setup");
   else if (codeScanning.state === "configured") {
@@ -275,11 +292,21 @@ export function checkBaseline({ securityUpdates, alerts, analysis, codeScanning,
     }
   }
   if (unread) findings.push(["token", unread]);
-  else if (unreadable.length) {
-    findings.push([
-      "token",
-      `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
-    ]);
+  else {
+    if (unreadable.length) {
+      findings.push([
+        "token",
+        `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
+      ]);
+    }
+    // Without admin read (analysis null) it was never requested, and the
+    // sentence above already covers it.
+    if (privateReporting == null && analysis != null) {
+      findings.push([
+        "token",
+        "GitHub did not answer the private vulnerability reporting read. It needs only Metadata (read), so rerun before changing the token.",
+      ]);
+    }
   }
   return findings;
 }
@@ -487,10 +514,20 @@ export function auditRepo(
   );
   // A deferral with nothing left to defer is stale, or a later regression of
   // that kind would stay a warning for good. Unread settings give a token
-  // finding, never a baseline one, so the baseline key is not judged then.
+  // finding, never a baseline one, so the baseline key is not judged then:
+  // neither with no admin token nor with one setting unread.
+  const SETTINGS_FIELDS = [
+    "alerts",
+    "securityUpdates",
+    "analysis",
+    "codeScanning",
+    "privateReporting",
+  ];
+  const unknown =
+    baseline?.unread || (baseline && SETTINGS_FIELDS.some((k) => baseline[k] == null));
   for (const kind of DEFERRABLE) {
     if (!exceptions[kind] || findings.some(([found]) => found === kind)) continue;
-    if (kind === "baseline" && baseline?.unread) continue;
+    if (kind === "baseline" && unknown) continue;
     deferred.push([
       "exception",
       `A stale deferral for ${kind}: nothing to defer; remove it from stacks.json.`,
@@ -595,8 +632,9 @@ const CODE_SCANNING_OFF = /code scanning is not enabled/i;
 // Admin readability is decided once: meta.security_and_analysis is present
 // only when the token that fetched meta has admin access, and main fetches
 // meta with the admin token. Without it every settings field is null
-// (unreadable) and the settings endpoints are not called, because their 404
-// would be ambiguous. With it, a 404 on either Dependabot endpoint means off.
+// (unreadable, or "n/a" for private reporting on a private or archived repo)
+// and the settings endpoints are not called, because their 404 would be
+// ambiguous. With it, a 404 on either Dependabot endpoint means off.
 // Dependabot alerts and security updates, read with an admin token. A 404 on
 // either means off; any other failure is null (unread).
 export async function readDependabot(repo, admin) {
@@ -613,6 +651,20 @@ export async function readDependabot(repo, admin) {
           : null,
     alerts: alerts.status === 204 ? true : alerts.status === 404 ? false : null,
   };
+}
+
+// Private vulnerability reporting, read with the admin token like the other
+// settings. 200 carries { enabled }. Anything else is null (unread): a 401, 403
+// or 404, and also a 422 or a 5xx that survives the retries, which request
+// throws. Only meta decides n/a, so a 422 on a repo meta calls public is a
+// token finding, never a silent pass, and it never sinks the repo's other checks.
+export async function readPrivateReporting(repo, admin) {
+  try {
+    const res = await request(`/repos/${repo}/private-vulnerability-reporting`, admin);
+    return res.status === 200 && typeof res.body?.enabled === "boolean" ? res.body.enabled : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
@@ -634,14 +686,25 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   }
   const readable = (res) => (res.status === 200 ? res.body : null);
   const rules = readable(await request(`/repos/${repo}/rules/branches/${branch}`, read));
-  let settings = { securityUpdates: null, alerts: null, analysis: null, codeScanning: null };
+  // GitHub offers private reporting on public repos only, and an archived
+  // repo is read-only: on either it is n/a, never read and never a finding.
+  const reporting = meta.private !== true && meta.archived !== true;
+  let settings = {
+    securityUpdates: null,
+    alerts: null,
+    analysis: null,
+    codeScanning: null,
+    privateReporting: reporting ? null : "n/a",
+  };
   if (admin && meta.security_and_analysis != null) {
-    const [dependabot, codeScanning] = await Promise.all([
+    const [dependabot, codeScanning, privateReporting] = await Promise.all([
       readDependabot(repo, admin),
       request(`/repos/${repo}/code-scanning/default-setup`, admin),
+      reporting ? readPrivateReporting(repo, admin) : "n/a",
     ]);
     settings = {
       ...dependabot,
+      privateReporting,
       analysis: meta.security_and_analysis,
       // An archived repo answers 403 "Code scanning is not enabled" here. That
       // is default setup off, not a token the audit cannot trust.

@@ -9,7 +9,7 @@ loadout runs it for me; by hand it runs from a Ward clone at the released tag.
 | Command | What it reads | What `--apply` does |
 |---|---|---|
 | `files [--dir <repo>] [--repo <owner/name>]` | The tree, every `.csproj`, the caller, `dependabot.yml`, `Directory.Build.props`, `package.json`, and with `GITHUB_TOKEN` set whether the repo is private | Writes the caller, the Dependabot config and `Directory.Build.props` where they are missing (from a clone at a release tag, the caller pins Ward's `codeql` and `automerge` jobs to that release's commit, so Dependabot moves them from tag to tag and auto-merge can trust the bump), adds the `codeql` job to a caller that has none (before `automerge:`, or at the end), and adds the npm scripts the module contract needs that are missing (`deploy:check` only for a wrangler setup); a script it will not guess, such as `test`, is reported as `ask`. An existing caller has already settled the inputs it sets, so a tie among the files for one of them (two EF projects at one depth, say) is not a `stop`: the caller's value stands, `""` included. `Directory.Build.props` is written only where the caller is new too: on a repo already on Ward it turns warnings into errors on a build that is green today, so a missing one is reported as `ask` and never written |
-| `settings <owner/repo> [--dir <checkout>]` | Dependabot alerts and security updates, secret scanning and push protection, `delete_branch_on_merge`, CodeQL default setup and the languages it scans, the caller's `codeql` job on the default branch or in `--dir`, and the tracked files that job will scan | Turns on what is off (so a merged PR's head branch is deleted on its own), and turns CodeQL default setup off once a caller with the `codeql` job is visible and covers every language default setup scans |
+| `settings <owner/repo> [--dir <checkout>]` | Dependabot alerts and security updates, secret scanning and push protection, private vulnerability reporting (public repos that are not archived), `delete_branch_on_merge`, CodeQL default setup and the languages it scans, the caller's `codeql` job on the default branch or in `--dir`, and the tracked files that job will scan | Turns on what is off (so a merged PR's head branch is deleted on its own), and turns CodeQL default setup off once a caller with the `codeql` job is visible and covers every language default setup scans |
 | `ruleset <owner/repo> [--no-codeql] [--bypass-admin]` | Classic protection, the branch rulesets, CodeQL's analyses of the default branch | Creates or updates the one branch ruleset from `templates/ruleset.json`, keeping the repo's own rule types and required checks |
 | `automerge <owner/repo>` | The rules on the default branch, `allow_auto_merge`, open Dependabot PRs | Allows auto-merge and asks Dependabot to rebase each open PR |
 | `status <owner/repo>` | All of the above | Nothing; one line |
@@ -19,10 +19,17 @@ adds the `codeql` job to the caller, `settings --dir . --apply` turns default se
 until it reads `default-setup=not-configured`, then I push the PR, so its own `codeql` run uploads
 and satisfies the code-scanning rule. `--dir` has no default: run from a Ward clone, `.` would read
 Ward's own caller, so a `--dir` whose origin is another repo is a `stop`. `ruleset` waits until
-CodeQL has analysed the default branch once, because a code-scanning rule before that blocks every
+CodeQL has analyzed the default branch once, because a code-scanning rule before that blocks every
 merge. `automerge` refuses until the default branch requires `ward / gate`, because auto-merge on a
 repo without required checks merges every Dependabot PR at once. `settings` is safe at any time:
 without a visible `codeql` job it leaves default setup on and says so.
+
+Private vulnerability reporting puts the "Report a vulnerability" button on a repo's Security tab.
+The security policy each repo inherits from its owner's `.github` repo (`malinfossum/.github` for
+mine) sends reporters there, so `settings` turns it on wherever it reads off. GitHub offers it on
+public repos only, and an archived repo is read-only, so on either it reads `n/a`: never read, never
+set, and never a `stop`. A read that fails is a `note`, never a `stop`: the read needs only Metadata
+(read), so it says nothing about the token, and the other settings still go through.
 
 CodeQL runs as the caller's `codeql` job, which calls Ward's `codeql.yml` at a pinned commit, and
 GitHub refuses its uploads while default setup is on. Before it plans default setup off, `settings`
@@ -65,7 +72,7 @@ One line per decision, a word padded to seven characters and then the text:
 | `note` | A package a new script needs (I install it, the script never does), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo, what a private repo without GHAS goes without, a repo `files` could not read |
 | `warn` | Files of a stack no module covers yet; the covered modules still apply, and the module is the next PR to Ward |
 | `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not. Exit 1, nothing written |
-| `wait` | CodeQL has not analysed the default branch yet; rerun later. Exit 1 |
+| `wait` | CodeQL has not analyzed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on, or CodeQL default setup that would be turned off |
 | `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |
 | `rebase` | An open Dependabot PR that would be asked to rebase |

@@ -6,7 +6,7 @@
 
 Every warded repo runs CodeQL through GitHub's default setup, and every main ruleset carries a
 `code_scanning` rule that waits for CodeQL results on the pull request's head commit. Default setup
-never analyses a pull request from a fork. Hugin PR #53 came from a contributor's fork, got 0 analyses
+never analyzes a pull request from a fork. Hugin PR #53 came from a contributor's fork, got 0 analyses
 on `refs/pull/53/head`, and could only be merged after I turned the rule off in Settings, merged and
 turned it back on. That manual step has to go, without dropping the rule.
 
@@ -222,7 +222,7 @@ green `codeql / analyze` runs, merge, audit clean. Open PRs from before the merg
 included) have no CodeQL results on their head once default setup is off, so the rule blocks them:
 `@dependabot rebase` each one, or merge `main` into a branch of mine. Portfolio
 also drops its `ruleset` exception in `stacks.json` and gets the code-scanning rule, since `actions`
-is always there to analyse. Workbench's six scaffold callers are regenerated with `renderCaller`, and
+is always there to analyze. Workbench's six scaffold callers are regenerated with `renderCaller`, and
 the loadout `ward` skill moves `settings` before the PR. All of that happens outside this PR.
 
 > Stress-tested 2026-10-14 (skill 1b85fca): 8 applied, 1 adapted, 0 decided by me.
