@@ -689,20 +689,6 @@ export function planSettings(
       body: { security_and_analysis: { secret_scanning: on, secret_scanning_push_protection: on } },
     });
   }
-  // The security policy in malinfossum/.github sends reporters to the Security
-  // tab's "Report a vulnerability"; this is what makes that button appear.
-  // "n/a" (a private or archived repo) is left alone.
-  if (privateReporting === false) {
-    actions.push({
-      what: "private vulnerability reporting on",
-      method: "PUT",
-      path: "/private-vulnerability-reporting",
-    });
-  } else if (privateReporting == null) {
-    notes.push(
-      "GitHub did not answer the private vulnerability reporting read, so it is left as it is; rerun settings.",
-    );
-  }
   if (deleteBranchOnMerge === false) {
     actions.push({
       what: "delete merged branches on",
@@ -740,6 +726,21 @@ export function planSettings(
         );
       }
     }
+  }
+  // The security policy in malinfossum/.github sends reporters to the Security
+  // tab's "Report a vulnerability"; this is what makes that button appear.
+  // "n/a" (a private or archived repo) is left alone. It goes last: a refused
+  // write stops the writes after it, and none of the others depend on it.
+  if (privateReporting === false) {
+    actions.push({
+      what: "private vulnerability reporting on",
+      method: "PUT",
+      path: "/private-vulnerability-reporting",
+    });
+  } else if (privateReporting == null) {
+    notes.push(
+      "GitHub did not answer the private vulnerability reporting read, so it is left as it is; rerun settings.",
+    );
   }
   if (withoutGhas) {
     notes.push(

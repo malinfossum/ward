@@ -293,7 +293,6 @@ export function checkBaseline({
   }
   if (unread) findings.push(["token", unread]);
   else if (unreadable.length) {
-    if (privateReporting == null) unreadable.push("private vulnerability reporting");
     findings.push([
       "token",
       `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
@@ -510,10 +509,12 @@ export function auditRepo(
   );
   // A deferral with nothing left to defer is stale, or a later regression of
   // that kind would stay a warning for good. Unread settings give a token
-  // finding, never a baseline one, so the baseline key is not judged then.
+  // finding, never a baseline one, so the baseline key is not judged then:
+  // neither with no admin token nor with one setting unread.
+  const unknown = baseline?.unread || findings.some(([found]) => found === "token");
   for (const kind of DEFERRABLE) {
     if (!exceptions[kind] || findings.some(([found]) => found === kind)) continue;
-    if (kind === "baseline" && baseline?.unread) continue;
+    if (kind === "baseline" && unknown) continue;
     deferred.push([
       "exception",
       `A stale deferral for ${kind}: nothing to defer; remove it from stacks.json.`,
@@ -640,16 +641,16 @@ export async function readDependabot(repo, admin) {
 }
 
 // Private vulnerability reporting, read with the admin token like the other
-// settings. 200 carries { enabled }; a 401, 403 or 404 is null (unread). A 422
-// is GitHub's "Repository must be public and not archived": the repo changed
-// after meta was read, so it is n/a, never an error that sinks the whole repo.
+// settings. 200 carries { enabled }. Anything else is null (unread): a 401, 403
+// or 404, and also a 422 or a 5xx that survives the retries, which request
+// throws. Only meta decides n/a, so a 422 on a repo meta calls public is a
+// warning, never a silent pass, and it never sinks the repo's other checks.
 export async function readPrivateReporting(repo, admin) {
   try {
     const res = await request(`/repos/${repo}/private-vulnerability-reporting`, admin);
     return res.status === 200 && typeof res.body?.enabled === "boolean" ? res.body.enabled : null;
-  } catch (error) {
-    if (error.message.startsWith("GitHub API 422 ")) return "n/a";
-    throw error;
+  } catch {
+    return null;
   }
 }
 

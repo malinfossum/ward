@@ -48,7 +48,8 @@ same variable: `GITHUB_TOKEN=$(gh auth token) npm test`.
 
 ## The tokens
 
-Everything the audit reads is public, except the five settings endpoints, which need admin read (private vulnerability reporting needs only Metadata read, but is read with the same token).
+Everything the audit reads is public, except the four settings endpoints, which need admin read.
+The private vulnerability reporting read needs only Metadata read, and goes through the same token.
 So two tokens do the work. The Actions token (`GITHUB_TOKEN`) lists the repos and reads trees,
 callers, project files and branch rules; its limit of 1,000 requests per hour per repository covers
 about 90 repos at the sweep's ten calls per repo. `WARD_AUDIT_TOKEN` is a fine-grained token

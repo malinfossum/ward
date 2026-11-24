@@ -881,13 +881,16 @@ const SETTINGS_ON = [
   [/\/code-scanning\/default-setup$/, 200, { state: "not-configured" }],
 ];
 
-test("fetchRepoData: private reporting off is a finding; 401, 403, 404 or no answer is unread; 422 is n/a", async () => {
+test("fetchRepoData: private reporting off is a finding; any other answer but 200 is unread, never a pass", async () => {
   for (const [status, body, want] of [
     [200, { enabled: false }, false],
+    [401, undefined, null],
     [404, undefined, null],
     [403, { message: "Must have admin rights to Repository." }, null],
     [200, {}, null],
-    [422, { message: "Repository must be public and not archived" }, "n/a"],
+    // Only meta decides n/a: a 422 on a repo meta calls public is a warning.
+    [422, { message: "Repository must be public and not archived" }, null],
+    [502, undefined, null],
   ]) {
     const stub = stubFetch([
       [/\/private-vulnerability-reporting$/, status, body],
@@ -905,8 +908,6 @@ test("fetchRepoData: private reporting off is a finding; 401, 403, 404 or no ans
             "Private vulnerability reporting is off; the security policy points reporters to it. Run apply.mjs settings.",
           ],
         ]);
-      } else if (want === "n/a") {
-        assert.deepEqual(findings, []);
       } else {
         // Alone, it is GitHub not answering: never the Administration sentence.
         assert.deepEqual(findings, [
@@ -920,6 +921,28 @@ test("fetchRepoData: private reporting off is a finding; 401, 403, 404 or no ans
       stub.restore();
     }
   }
+});
+
+test("auditRepo: a baseline deferral is not called stale while private reporting is unread", () => {
+  const data = {
+    repo: "wendhq/wend",
+    self: false,
+    tree: ["package.json"],
+    caller: CALLER,
+    files: {},
+    baseline: { ...baseline, privateReporting: null },
+  };
+  const stacksWithDeferral = {
+    ...stacks,
+    exceptions: { "wendhq/wend": { baseline: "Joint repo (2026-10-08)." } },
+  };
+  const { findings } = auditRepo(data, { stacks: stacksWithDeferral, today: "2026-09-30" });
+  assert.ok(!findings.some(([, message]) => /stale deferral for baseline/.test(message)));
+  const known = auditRepo(
+    { ...data, baseline },
+    { stacks: stacksWithDeferral, today: "2026-09-30" },
+  );
+  assert.ok(known.findings.some(([, message]) => /stale deferral for baseline/.test(message)));
 });
 
 test("fetchRepoData: a private or archived repo has no private reporting to read, and no finding for it", async () => {

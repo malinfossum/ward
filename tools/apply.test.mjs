@@ -903,8 +903,8 @@ test("settings: plans the five changes a bare repo needs and makes them only wit
         "Dependabot alerts on",
         "Dependabot security updates on",
         "secret scanning and push protection on",
-        "private vulnerability reporting on",
         "delete merged branches on",
+        "private vulnerability reporting on",
       ],
     );
     assert.deepEqual(stub.writes(), []);
@@ -913,8 +913,8 @@ test("settings: plans the five changes a bare repo needs and makes them only wit
       ["PUT", "/repos/malinfossum/x/vulnerability-alerts"],
       ["PUT", "/repos/malinfossum/x/automated-security-fixes"],
       ["PATCH", "/repos/malinfossum/x"],
-      ["PUT", "/repos/malinfossum/x/private-vulnerability-reporting"],
       ["PATCH", "/repos/malinfossum/x"],
+      ["PUT", "/repos/malinfossum/x/private-vulnerability-reporting"],
     ]);
     const patches = stub.calls.filter((c) => c.method === "PATCH").map((c) => c.body);
     assert.deepEqual(patches, [
@@ -1002,8 +1002,8 @@ test("settings: a refused write (403) is an error, not done, and stops the rest"
         "set     Dependabot alerts on",
         "set     Dependabot security updates on",
         "set     secret scanning and push protection on",
-        "set     private vulnerability reporting on",
         "set     delete merged branches on",
+        "set     private vulnerability reporting on",
         "done    Dependabot alerts on",
         "error   Dependabot security updates on 403",
       ],
@@ -1384,6 +1384,21 @@ test("planSettings: private reporting goes on only when read off; n/a is left al
       ],
     });
   }
+});
+
+test("planSettings: the private reporting write goes last, after CodeQL default setup off", () => {
+  const plan = planSettings(
+    {
+      ...SETTLED,
+      privateReporting: false,
+      codeScanning: { state: "configured", languages: ["actions"] },
+    },
+    { job: true, languages: ["actions"], deleteBranchOnMerge: false },
+  );
+  assert.deepEqual(
+    plan.actions.map((a) => a.what),
+    ["delete merged branches on", "CodeQL default setup off", "private vulnerability reporting on"],
+  );
 });
 
 test("settings and status: an archived repo reads private reporting as n/a and never writes it", async () => {
