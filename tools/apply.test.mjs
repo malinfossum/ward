@@ -720,9 +720,30 @@ test("vue-tsc is picked for Vue, and references get --build", () => {
   assert.equal(typecheck(vue, "{}"), "vue-tsc --noEmit");
   assert.equal(typecheck(plain, REFS), "tsc --build");
   assert.equal(typecheck(plain, "{}"), "tsc --noEmit");
+  // JSONC: a commented-out or empty references list is no reference.
+  const commented = '{\n  // "references": [{ "path": "./tsconfig.node.json" }]\n}';
+  assert.equal(typecheck(plain, commented), "tsc --noEmit");
+  assert.equal(typecheck(plain, '{ "references": [] }'), "tsc --noEmit");
 });
 
-test("a lint that rewrites files is an ask, not a keep", () => {
+test("a module in a subfolder reads its own tsconfig.json, and --build comes with a note", () => {
+  const manifest = {
+    name: "x",
+    scripts: { lint: "biome ci .", test: "vitest run" },
+    devDependencies: { typescript: "6.0.0" },
+  };
+  const dir = repo({ "web/package.json": JSON.stringify(manifest), "web/tsconfig.json": REFS });
+  const plan = planFiles(dir, { templates });
+  assert.equal(plan.inputs.node, "web");
+  const edit = plan.files.find((f) => f.path === "web/package.json" && f.action === "edit");
+  assert.equal(JSON.parse(edit.content).scripts.typecheck, "tsc --build");
+  assert.ok(
+    plan.notes.some((n) => /^typecheck runs --build/.test(n)),
+    plan.notes.join("\n"),
+  );
+});
+
+test("a lint that fixes instead of reporting is an ask, not a keep", () => {
   const manifest = {
     name: "x",
     scripts: { lint: 'run-s "lint:*"', "lint:eslint": "eslint . --fix", test: "vitest run" },
@@ -731,7 +752,12 @@ test("a lint that rewrites files is an ask, not a keep", () => {
   const plan = planFiles(dir, { templates });
   assert.deepEqual(
     plan.files.filter((f) => f.path === "package.json").map((f) => [f.action, f.detail]),
-    [["ask", 'make "lint:eslint" check-only; the gate fails a lint that rewrites files']],
+    [
+      [
+        "ask",
+        'make "lint:eslint" check-only; the gate fails a lint that fixes instead of reporting',
+      ],
+    ],
   );
 });
 

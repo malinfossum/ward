@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
 import { git } from "./git.mjs";
-import { planSteps, rewritingLint } from "./node-contract.mjs";
+import { fixingLint, planSteps } from "./node-contract.mjs";
 import {
   CODEQL_PINNED,
   exceptionsFor,
@@ -302,7 +302,15 @@ function typecheckFor(deps, scripts, tsconfig) {
   if ("astro" in deps) return "astro check";
   if (Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
   const tool = "vue-tsc" in deps ? "vue-tsc" : "tsc";
-  return /"references"\s*:/.test(tsconfig) ? `${tool} --build` : `${tool} --noEmit`;
+  return hasReferences(tsconfig) ? `${tool} --build` : `${tool} --noEmit`;
+}
+
+// tsconfig.json is JSONC: a commented-out "references" line, or an empty
+// list, is no reference. Whole-line and block comments are dropped first; a
+// URL inside a string ("$schema") is not a comment and stays.
+function hasReferences(tsconfig) {
+  const code = tsconfig.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return /"references"\s*:\s*\[\s*\{/.test(code);
 }
 
 const SCRIPT_FOR = {
@@ -331,6 +339,11 @@ export function missingScripts(pkg, files, tsconfig = "") {
   }
   if (add.typecheck?.startsWith("tsc ") && !("typescript" in deps)) {
     notes.push("typecheck runs tsc: add typescript as a devDependency first.");
+  }
+  if (add.typecheck?.endsWith(" --build")) {
+    notes.push(
+      "typecheck runs --build, which emits for any referenced tsconfig without noEmit: check each sets noEmit (Vite and create-vue do).",
+    );
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
     notes.push("deploy:check runs wrangler: add wrangler as a devDependency first.");
@@ -604,12 +617,12 @@ export function planFiles(
         files.push({ path: manifest, action: "ask", detail });
       }
       // The gate fails these, so say so before the first CI run does.
-      const rewriting = rewritingLint(pkg.scripts ?? {});
-      for (const name of rewriting) {
-        const detail = `make "${name}" check-only; the gate fails a lint that rewrites files`;
+      const fixing = fixingLint(pkg.scripts ?? {});
+      for (const name of fixing) {
+        const detail = `make "${name}" check-only; the gate fails a lint that fixes instead of reporting`;
         files.push({ path: manifest, action: "ask", detail });
       }
-      if (!names.length && !ask.length && !rewriting.length) {
+      if (!names.length && !ask.length && !fixing.length) {
         files.push({ path: manifest, action: "keep" });
       }
     }
