@@ -127,6 +127,8 @@ test("release tags resolve to commits for annotated and lightweight tags, offlin
     git("tag", "v1");
     git("commit", "-q", "--allow-empty", "-m", "two");
     git("tag", "v1.1.0");
+    // A branch of the same name makes the short ref name tags/v1.1.0.
+    git("branch", "v1.1.0");
     const tags = releaseTags(dir);
     assert.deepEqual([...tags.keys()].sort(), ["v1.0.0", "v1.1.0"]);
     assert.equal(tags.get("v1.0.0"), git("rev-parse", "HEAD~1").stdout.trim());

@@ -219,18 +219,15 @@ export function renderDependabot(template, ecosystems) {
 // a pin on any other commit tracks main. The template cannot name its own
 // release commit, so it pins the newest release that exists when it changes,
 // and a clone at a release pins to that release's commit instead, with the
-// release's name as the version comment Dependabot reads and rewrites. Only a
-// pin that ends its line gets the comment: anything after it (a closing quote,
-// another tool's comment) stays as it was, and only the SHA moves.
+// release's name as the version comment Dependabot reads and rewrites. The
+// pins check holds the template to `@<sha> # vX.Y.Z`; a pin in any other shape
+// moves its SHA only and keeps whatever follows it.
 export function pinToRelease(template, release) {
   if (!release) return template;
-  return template.replace(WARD_PINS, (pin, file, ...rest) => {
-    const [offset, text] = rest.slice(-2);
-    const next = text[offset + pin.length];
-    if (next !== undefined && next !== "\n" && next !== "\r") {
-      return pin.replace(/@[0-9a-f]{40}/, `@${release.sha}`);
-    }
-    return `malinfossum/ward/.github/workflows/${file}@${release.sha} # ${release.tag}`;
+  return template.replace(WARD_PINS, (pin, _file, sha, comment) => {
+    const moved = pin.replace(sha, release.sha);
+    if (!/^v\d+\.\d+\.\d+$/.test(comment ?? "")) return moved;
+    return moved.replace(/#[ \t]*\S+$/, `# ${release.tag}`);
   });
 }
 

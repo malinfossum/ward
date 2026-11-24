@@ -1813,31 +1813,41 @@ test("docs/apply.md documents every command and every output word", () => {
 const OLD = "9987863d40a510af9a27a223d8007a767a0020ad";
 const NEW = "bf47ebacef790cd4847856c10f63b0d3601f1c22";
 
-test("pinToRelease moves both Ward pins and their version comments, and nothing else", () => {
-  const text = [
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD} # v1.7.1`,
-    `    uses: malinfossum/ward/.github/workflows/dependabot-automerge.yml@${OLD}`,
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD}  #v1.7.1`,
-    "    uses: malinfossum/ward/.github/workflows/ci.yml@v1",
-    `      - uses: actions/checkout@${OLD} # v7.0.1`,
-    `    uses: malinfossum/ward/.github/workflows/codeql.yml@${OLD}`,
-    "    # v1.7.1 stays: a comment on the next line is not the pin's",
-    `    uses: "malinfossum/ward/.github/workflows/codeql.yml@${OLD}"`,
-  ].join("\n");
+test("pinToRelease moves Ward pins and their vX.Y.Z comments, and nothing else", () => {
+  const w = "malinfossum/ward/.github/workflows";
+  // [template line, the line a clone at v1.10.0 writes]
+  const cases = [
+    [`    uses: ${w}/codeql.yml@${OLD} # v1.7.1`, `    uses: ${w}/codeql.yml@${NEW} # v1.10.0`],
+    [
+      `    uses: ${w}/dependabot-automerge.yml@${OLD} # v1.7.1`,
+      `    uses: ${w}/dependabot-automerge.yml@${NEW} # v1.10.0`,
+    ],
+    [
+      `    uses: ${w}/codeql.yml@${OLD}  #v1.7.1  `,
+      `    uses: ${w}/codeql.yml@${NEW}  # v1.10.0  `,
+    ],
+    [
+      `    uses: ${w}/codeql.yml@${OLD} # v1.7.1 # keep`,
+      `    uses: ${w}/codeql.yml@${NEW} # v1.10.0 # keep`,
+    ],
+    // Shapes the pins check rejects: the SHA moves, nothing else changes.
+    [`    uses: ${w}/codeql.yml@${OLD}`, `    uses: ${w}/codeql.yml@${NEW}`],
+    [`    uses: ${w}/codeql.yml@${OLD} # keep`, `    uses: ${w}/codeql.yml@${NEW} # keep`],
+    [`    uses: "${w}/codeql.yml@${OLD}" # v1.7.1`, `    uses: "${w}/codeql.yml@${NEW}" # v1.7.1`],
+    // Not Ward's pins.
+    [`    uses: ${w}/ci.yml@v1`, `    uses: ${w}/ci.yml@v1`],
+    [
+      `      - uses: actions/checkout@${OLD} # v7.0.1`,
+      `      - uses: actions/checkout@${OLD} # v7.0.1`,
+    ],
+    [
+      `    uses: not${w}/codeql.yml@${OLD} # v1.7.1`,
+      `    uses: not${w}/codeql.yml@${OLD} # v1.7.1`,
+    ],
+  ];
+  const text = cases.map(([line]) => line).join("\n");
   const pinned = pinToRelease(text, { sha: NEW, tag: "v1.10.0" }).split("\n");
-  const moved = (file) => `    uses: malinfossum/ward/.github/workflows/${file}@${NEW} # v1.10.0`;
-  assert.equal(pinned[0], moved("codeql.yml"));
-  assert.equal(pinned[1], moved("dependabot-automerge.yml"), "a pin with no comment gets one");
-  assert.equal(pinned[2], moved("codeql.yml"), "odd spacing is replaced, never doubled");
-  assert.match(pinned[3], /ci\.yml@v1$/);
-  assert.equal(pinned[4], `      - uses: actions/checkout@${OLD} # v7.0.1`);
-  assert.equal(pinned[5], moved("codeql.yml"));
-  assert.equal(pinned[6], "    # v1.7.1 stays: a comment on the next line is not the pin's");
-  assert.equal(
-    pinned[7],
-    `    uses: "malinfossum/ward/.github/workflows/codeql.yml@${NEW}"`,
-    "a pin inside quotes moves its SHA only",
-  );
+  for (const [i, [line, want]] of cases.entries()) assert.equal(pinned[i], want, line);
   assert.equal(pinToRelease(text, null), text);
 });
 
