@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -28,6 +27,7 @@ import {
   statusLine,
   writeFiles,
 } from "./apply.mjs";
+import { git as gitIn } from "./git.mjs";
 import { parseCaller, request } from "./repo-audit.mjs";
 import { loadStacks } from "./stacks.mjs";
 
@@ -744,7 +744,7 @@ test("the files command resolves exceptions by repo name, from --repo or the ori
   assert.match(other.lines[0], /dotnet="App\.slnx"/);
 
   const cloned = repo(files);
-  const git = (...args) => spawnSync("git", ["-C", cloned, ...args]);
+  const git = (...args) => gitIn(cloned, [...args]);
   git("init", "-q");
   git("remote", "add", "origin", "git@github.com:malinfossum/backend-course.git");
   const viaRemote = await runApply(["files", "--dir", cloned], {}, deps);
@@ -772,7 +772,7 @@ test("in a git work tree the tree is what git would add: an ignored folder is in
     "web/package.json": PKG,
     "gone.txt": "",
   });
-  assert.equal(spawnSync("git", ["-C", dir, "init", "-q"]).status, 0);
+  assert.equal(gitIn(dir, ["init", "-q"]).status, 0);
   const plan = planFiles(dir, { templates });
   assert.equal(plan.inputs.node, "web");
   assert.deepEqual(plan.stops, []);
@@ -781,7 +781,7 @@ test("in a git work tree the tree is what git would add: an ignored folder is in
     ["github-actions /", "npm /web"],
   );
   assert.doesNotMatch(file(plan, DEPENDABOT).content, /directory: \/ignored/);
-  spawnSync("git", ["-C", dir, "add", "gone.txt"]);
+  gitIn(dir, ["add", "gone.txt"]);
   rmSync(join(dir, "gone.txt"));
   assert.doesNotThrow(() => planFiles(dir, { templates }));
   const plain = repo({ ".gitignore": "ignored/\n", "ignored/package.json": PKG });
@@ -1083,7 +1083,7 @@ const WITHOUT_JOB = WITH_JOB.replace(CODEQL_BLOCK, "");
 // A checkout of a repo with its files staged, as files --apply leaves it.
 function checkout(files, origin) {
   const dir = repo(files);
-  const git = (...args) => spawnSync("git", ["-C", dir, ...args]);
+  const git = (...args) => gitIn(dir, [...args]);
   git("init", "-q");
   if (origin) git("remote", "add", "origin", origin);
   git("add", ".");
@@ -1402,22 +1402,6 @@ test("planSettings: the private reporting write goes last, after CodeQL default 
   );
 });
 
-test("settings and status: an archived repo reads private reporting as n/a and never writes it", async () => {
-  const stub = stubFetch(
-    bareRoutes([[/^\/repos\/malinfossum\/x$/, 200, { ...META, archived: true }, "GET"]]),
-  );
-  try {
-    const out = await runApply(["settings", "malinfossum/x", "--apply"], ENV);
-    assert.ok(!out.lines.some((l) => l.includes("private vulnerability reporting")));
-    assert.ok(!stub.writes().some(([, path]) => path.endsWith("/private-vulnerability-reporting")));
-    assert.ok(!stub.calls.some((c) => c.path.endsWith("/private-vulnerability-reporting")));
-    const status = await runApply(["status", "malinfossum/x"], ENV);
-    assert.match(status.lines[0], / private-reporting=n\/a /);
-  } finally {
-    stub.restore();
-  }
-});
-
 test("settings, ruleset and automerge: an archived repo is a stop with no write, status still reads", async () => {
   const stub = stubFetch(
     bareRoutes([[/^\/repos\/malinfossum\/x$/, 200, { ...META, archived: true }, "GET"]]),
@@ -1435,8 +1419,11 @@ test("settings, ruleset and automerge: an archived repo is a stop with no write,
       );
     }
     assert.deepEqual(stub.writes(), []);
+    // Private reporting is n/a there: never read, so never a token finding either.
+    assert.ok(!stub.calls.some((c) => c.path.endsWith("/private-vulnerability-reporting")));
     const status = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(status.exitCode, 0);
+    assert.match(status.lines[0], / private-reporting=n\/a /);
   } finally {
     stub.restore();
   }
@@ -1879,7 +1866,7 @@ test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", 
   const dir = mkdtempSync(join(tmpdir(), "ward-release-"));
   after(() => rmSync(dir, { recursive: true, force: true }));
   const run = (...args) =>
-    spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+    gitIn(dir, ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
       encoding: "utf8",
     });
   run("init", "-q");
@@ -1929,8 +1916,8 @@ test("releaseCommit is HEAD and its newest vX.Y.Z only where one points at it", 
 
   // The ward skill's clone: shallow, at v1. git follows the tags on HEAD.
   const clone = join(dir, "clone");
-  const cloned = spawnSync(
-    "git",
+  const cloned = gitIn(
+    dir,
     ["clone", "-q", "--depth", "1", "--branch", "v1", pathToFileURL(dir).href, clone],
     { encoding: "utf8" },
   );

@@ -1,14 +1,13 @@
 // git in a folder the caller names. A git hook exports GIT_DIR and its kin, and
 // git obeys them over -C, so a read of that folder would read the hook's repo
-// instead. The child gets every variable but these, which are the ones
-// `git rev-parse --local-env-vars` lists (a test holds the two together).
+// instead. The child gets every variable but these: the ones
+// `git rev-parse --local-env-vars` lists, except GIT_CONFIG and its kin, which
+// carry config set on purpose (safe.directory in a container, say) and point
+// at no repo. A test holds the two lists together.
 import { spawnSync } from "node:child_process";
 
 export const LOCAL_ENV = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_CONFIG",
-  "GIT_CONFIG_PARAMETERS",
-  "GIT_CONFIG_COUNT",
   "GIT_OBJECT_DIRECTORY",
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -23,9 +22,12 @@ export const LOCAL_ENV = [
 ];
 
 // Windows names variables without regard to case, so the match ignores it too.
+// An env the caller passes is scrubbed the same way, never replaced.
 export function git(dir, args, options = {}) {
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => !LOCAL_ENV.includes(name.toUpperCase())),
+    Object.entries(options.env ?? process.env).filter(
+      ([name]) => !LOCAL_ENV.includes(name.toUpperCase()),
+    ),
   );
   return spawnSync("git", ["-C", dir, ...args], { encoding: "utf8", ...options, env });
 }

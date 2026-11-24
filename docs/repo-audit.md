@@ -58,7 +58,8 @@ touches only the settings endpoints, and if it leaks it can read settings, never
 fine-grained token covers one owner, so `WARD_AUDIT_TOKEN` covers my own repos only, and an org
 gets its settings read only through its own `AUDIT_TOKEN_ROOKDEX` or `AUDIT_TOKEN_WENDHQ`. Without
 one, the audit does not read that org's settings at all: each of its repos gets one `token` warning
-that names the missing secret, and every other check still runs. On my own repos, and on an org that
+that names the missing secret, and every other check still runs. The branch rules go through the
+read token, so a failed rules read adds its own `token` finding beside it. On my own repos, and on an org that
 has its own token, a `token` finding fails the run instead: a missing or expired token must not turn
 the settings checks into a silent pass. The token expires after a year; the Monday after, the audit goes red with a `token`
 finding on every repo of mine, which is the reminder to make a new one.

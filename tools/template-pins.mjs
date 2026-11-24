@@ -56,9 +56,7 @@ export function pinProblems(text, tags) {
     );
     if (!newest) problems.push(`${file}@${sha} is not the commit of a vX.Y.Z tag`);
     else if (rest) {
-      problems.push(
-        `${file}@${sha} has text after ${comment ? "its version comment" : "it"}: ${rest}`,
-      );
+      problems.push(`${file}@${sha} has text after ${comment ? "its comment" : "it"}: ${rest}`);
     } else if (comment !== newest) {
       problems.push(`${file}@${sha} says ${comment ?? "nothing"}, but it is ${newest}`);
     }

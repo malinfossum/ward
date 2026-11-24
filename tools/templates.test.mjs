@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { FIRST_PARTY_ACTIONS, RUNTIME_BOUND } from "./automerge.mjs";
+import { git as gitIn } from "./git.mjs";
 import { pinProblems, releaseTags, WARD_PINS } from "./template-pins.mjs";
 
 const read = (path) => readFileSync(path, "utf8");
@@ -108,14 +108,14 @@ test("a template pin passes only on a release tag commit named in its comment", 
   ]);
 });
 
-test("a template pin fails with text after its version comment", () => {
+test("a template pin fails with text after its comment", () => {
   const lines = [
     pin(`codeql.yml@${V180} # v1.8.0 (was v1.7.1)`),
     pin(`codeql.yml@${V180}" # v1.8.0`),
     `${pin(`codeql.yml@${V180} # v1.8.0`)}  \r`,
   ];
   assert.deepEqual(pinProblems(lines.join("\n"), TAGS), [
-    `codeql.yml@${V180} has text after its version comment: (was v1.7.1)`,
+    `codeql.yml@${V180} has text after its comment: (was v1.7.1)`,
     `codeql.yml@${V180} has text after it: " # v1.8.0`,
   ]);
 });
@@ -137,7 +137,7 @@ test("the caller template pins Ward twice, codeql and automerge", () => {
 test("release tags resolve to commits for annotated and lightweight tags, offline", () => {
   const dir = mkdtempSync(join(tmpdir(), "ward-tags-"));
   const git = (...args) =>
-    spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
+    gitIn(dir, ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
       encoding: "utf8",
     });
   try {

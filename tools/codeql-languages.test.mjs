@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { LANGUAGES, languagesFor, trackedFiles } from "./codeql-languages.mjs";
+import { git as gitIn } from "./git.mjs";
 import { loadStacks } from "./stacks.mjs";
 
 const { ignore } = loadStacks();
@@ -26,12 +27,12 @@ const scratch = () => {
 // A git work tree with the given files staged, as a checkout would have them tracked.
 function staged(files) {
   const dir = scratch();
-  spawnSync("git", ["-C", dir, "init", "-q"]);
+  gitIn(dir, ["init", "-q"]);
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(join(dir, dirname(path)), { recursive: true });
     writeFileSync(join(dir, path), content);
   }
-  spawnSync("git", ["-C", dir, "add", "."]);
+  gitIn(dir, ["add", "."]);
   return dir;
 }
 
@@ -71,14 +72,12 @@ test("ignored folders, minified scripts, HTML and lone headers never count", () 
 
 test("trackedFiles reads git's NUL-separated list, so a name with a newline is one path", () => {
   const dir = staged({ "src/app.ts": "" });
-  const blob = spawnSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], {
+  const blob = gitIn(dir, ["hash-object", "-w", "--stdin"], {
     input: "x\n",
     encoding: "utf8",
   }).stdout.trim();
   // Windows cannot hold such a file on disk, but an index can, as a fork's tree could.
-  const added = spawnSync("git", [
-    "-C",
-    dir,
+  const added = gitIn(dir, [
     "-c",
     "core.protectNTFS=false",
     "update-index",
