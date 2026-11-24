@@ -12,8 +12,8 @@ const ME = "malinfossum.dev@proton.me";
 // NODE_TEST_CONTEXT in this process's environment. A fixture command that
 // itself runs `node --test` (node-ok's own test script, run through
 // node-contract.mjs) would inherit that variable and see a test run already
-// in progress, skip its test files, and exit 0 — making "node-ok passes"
-// vacuous. Strip it so a nested `node --test` actually runs.
+// in progress, skip its test files, and exit 0. That would make "node-ok
+// passes" vacuous, so it is stripped and a nested `node --test` actually runs.
 // A GIT_DIR a hook exported would point identity.mjs at the hook's repo, so
 // git's repo-local variables go too.
 function fixtureEnv(env) {
@@ -35,7 +35,10 @@ function run(script, args, { cwd, env = {} } = {}) {
 function identity(email, message) {
   const dir = mkdtempSync(join(tmpdir(), "ward-identity-"));
   try {
-    const setup = (...args) => assert.equal(git(dir, args).status, 0, args.join(" "));
+    const setup = (...args) => {
+      const result = git(dir, args);
+      assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+    };
     setup("init", "--quiet");
     const author = ["-c", "user.name=Fixture", "-c", `user.email=${email}`];
     setup(...author, "commit", "--quiet", "--allow-empty", "-m", message);

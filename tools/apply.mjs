@@ -898,9 +898,10 @@ function repoName(argv, dir) {
   return remote.status === 0 ? repoFromRemote(remote.stdout) : "";
 }
 
-// Whether the repo is private, read with GITHUB_TOKEN when it is set. Without
-// a token, or for a repo GitHub does not show it, files plans as for a public
-// repo, as it did before it could tell; the note says so when the read failed.
+// Whether the repo is private or archived, read with GITHUB_TOKEN when it is
+// set; files stops on an archived one. Without a token, or for a repo GitHub
+// does not show it, files plans as for a public repo that is not archived, as
+// it did before it could tell; the note says so when the read failed.
 async function privacyOf(repo, token) {
   if (!repo || !token) return { isPrivate: false, note: "" };
   try {

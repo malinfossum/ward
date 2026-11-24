@@ -1435,11 +1435,11 @@ test("settings, ruleset and automerge: an archived repo is a stop with no write,
       );
     }
     assert.deepEqual(stub.writes(), []);
-    // Private reporting is n/a there: never read, so never a token finding either.
-    assert.ok(!stub.calls.some((c) => c.path.endsWith("/private-vulnerability-reporting")));
     const status = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(status.exitCode, 0);
     assert.match(status.lines[0], / private-reporting=n\/a /);
+    // status reads everything else, but private reporting is n/a there: never read.
+    assert.ok(!stub.calls.some((c) => c.path.endsWith("/private-vulnerability-reporting")));
   } finally {
     stub.restore();
   }

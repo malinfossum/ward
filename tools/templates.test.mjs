@@ -120,6 +120,19 @@ test("a template pin fails with text after its comment", () => {
   ]);
 });
 
+test("a template pin fails a comment spaced any other way than one space each side", () => {
+  const lines = [
+    `@${V180} #v1.8.0`,
+    `@${V180}\t#\tv1.8.0`,
+    `@${V180}  # v1.8.0`,
+    `@${V180} #  v1.8.0`,
+  ];
+  assert.deepEqual(
+    pinProblems(lines.map((line) => pin(`codeql.yml${line}`)).join("\n"), TAGS),
+    lines.map(() => `codeql.yml@${V180} spaces its comment unlike " # v1.8.0"`),
+  );
+});
+
 test("a template pin on a commit with two release tags must name the newest", () => {
   const shared = new Map([...TAGS, ["v1.8.1", V180], ["v1.10.0", V180]]);
   assert.deepEqual(pinProblems(pin(`codeql.yml@${V180} # v1.10.0`), shared), []);

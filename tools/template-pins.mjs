@@ -40,23 +40,24 @@ export function newestRelease(names) {
   return names.filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag)).sort(newer)[0];
 }
 
-// A pin passes as `@<sha> # vX.Y.Z` and nothing after it on the line, where
-// the tag is the newest release on that commit, the one apply.mjs writes when
-// it pins a new caller there.
+// A pin passes as `@<sha> # vX.Y.Z` (one space each side of the #) and nothing
+// after it on the line, where the tag is the newest release on that commit,
+// the one apply.mjs writes when it pins a new caller there.
 export function pinProblems(text, tags) {
   const problems = [];
   for (const match of text.matchAll(WARD_PINS)) {
     const [pin, file, sha, comment] = match;
-    const rest = text
-      .slice(match.index + pin.length)
-      .split(/\r?\n/)[0]
-      .trim();
+    const end = match.index + pin.length;
+    const newline = text.indexOf("\n", end);
+    const rest = text.slice(end, newline === -1 ? undefined : newline).trim();
     const newest = newestRelease(
       [...tags].filter(([, commit]) => commit === sha).map(([tag]) => tag),
     );
     if (!newest) problems.push(`${file}@${sha} is not the commit of a vX.Y.Z tag`);
     else if (rest) {
       problems.push(`${file}@${sha} has text after ${comment ? "its comment" : "it"}: ${rest}`);
+    } else if (comment && !pin.endsWith(`@${sha} # ${comment}`)) {
+      problems.push(`${file}@${sha} spaces its comment unlike " # ${comment}"`);
     } else if (comment !== newest) {
       problems.push(`${file}@${sha} says ${comment ?? "nothing"}, but it is ${newest}`);
     }
