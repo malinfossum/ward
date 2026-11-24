@@ -2,43 +2,55 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fixingLint, planSteps } from "./node-contract.mjs";
 
-test("the lint:* scripts a run-s glob reaches are named when they fix", () => {
+test("the lint family is flagged by name when it fixes, whatever runs it", () => {
   const scripts = {
-    lint: 'run-s "lint:*"',
+    lint: 'concurrently "npm:lint:*"',
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix-dry-run --cache",
     "lint:biome": "biome check --write .",
     "lint:old": "biome check --apply",
-    "lint:css:deep": "stylelint --fix", // * stays inside one segment
+    "prelint:css": "stylelint --fix",
     fix: "eslint . --fix",
     "format:lint": "prettier --write .",
   };
-  assert.deepEqual(fixingLint(scripts), ["lint:oxlint", "lint:eslint", "lint:biome", "lint:old"]);
+  assert.deepEqual(fixingLint(scripts), [
+    "lint:oxlint",
+    "lint:eslint",
+    "lint:biome",
+    "lint:old",
+    "prelint:css",
+  ]);
 });
 
-test("a lint:fix helper that lint never runs is not flagged", () => {
-  const scripts = { lint: "eslint .", "lint:fix": "eslint . --fix" };
-  assert.deepEqual(fixingLint(scripts), []);
+test("a :fix variant counts only when lint runs it", () => {
+  const helper = { lint: "eslint .", "lint:fix": "eslint . --fix", "lint:js:fix": "eslint --fix" };
+  assert.deepEqual(fixingLint(helper), []);
+  const globbed = { lint: 'run-s "lint:*"', "lint:fix": "eslint . --fix" };
+  assert.deepEqual(fixingLint(globbed), ["lint:fix"]);
 });
 
-test("npm's pre and post hooks and npm run chains count", () => {
+test("npm's pre and post hooks and run chains reach scripts outside the family", () => {
   const scripts = {
-    prelint: "eslint . --fix",
-    lint: "npm run --silent format && eslint .",
+    lint: "pnpm --silent run format && eslint .",
     format: "prettier -w .",
     postformat: "biome format --write .",
-    postlint: "echo done",
+    postpostformat: "eslint --fix",
+    style: "stylelint --fix",
+    "lint:all": 'concurrently "npm run style" \'sh -c "npm run types"\'',
+    types: "tsc --noEmit",
   };
-  assert.deepEqual(fixingLint(scripts), ["prelint", "format", "postformat"]);
+  // postpostformat is a hook's hook, which npm never runs.
+  assert.deepEqual(fixingLint(scripts), ["format", "postformat", "style"]);
 });
 
-test("run-p with arguments and --, and ** across segments", () => {
+test("run-p with arguments and --; * stays in one segment, ** crosses them", () => {
   const scripts = {
-    lint: 'run-p "lint:** {@}" --',
-    "lint:css:deep": "stylelint --fix",
-    "lint:js": "eslint .",
+    lint: 'run-p "check:* {@}" "deep:** {@}" --',
+    "check:css:deep": "stylelint --fix",
+    "deep:css:deep": "stylelint --fix",
+    "check:js": "eslint .",
   };
-  assert.deepEqual(fixingLint(scripts), ["lint:css:deep"]);
+  assert.deepEqual(fixingLint(scripts), ["deep:css:deep"]);
 });
 
 test("a check-only lint passes, and look-alike flags are no fix", () => {
@@ -48,6 +60,8 @@ test("a check-only lint passes, and look-alike flags are no fix", () => {
     "lint:fixtures": "node check.mjs --fixtures",
     "lint:fixed": "tool --fixed-width",
     "lint:watch": "tsc -w",
+    "lint:prettier": "prettier --check . && npm run lint -w packages/app",
+    "lint:bad": null,
   };
   assert.deepEqual(fixingLint(scripts), []);
 });

@@ -52,8 +52,20 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
 // passes with fixable errors still in the committed code. --fix also covers
 // --fix-type, --fix-dangerously and --fix-dry-run (that one writes nothing, but
 // leaves fixable errors out of the exit code); --fix=false is off. --write and
-// --apply are Biome's and Prettier's, and -w is Prettier's short --write.
-const FIXES = /(?:^|\s)--(?:fix|write|apply)(?!\w|=false)|\bprettier\b.*\s-w(?!\S)/;
+// --apply are Biome's and Prettier's, and -w is Prettier's short --write, so it
+// counts only inside a prettier command (npm's -w is a workspace).
+const LONG_FIX = /(?:^|\s)--(?:fix|write|apply)(?!\w|=false)/;
+const PRETTIER_W = /\bprettier\b.*\s-w(?!\S)/;
+const segments = (cmd) => cmd.split(/&&|\|\||[;|]/);
+const fixes = (cmd) =>
+  typeof cmd === "string" && segments(cmd).some((s) => LONG_FIX.test(s) || PRETTIER_W.test(s));
+
+// lint, lint:* and their pre and post hooks: a lint runner usually reaches
+// them in ways no parser here follows (concurrently, sh -c, pnpm). A :fix
+// script is the fixing variant on purpose and counts only when lint runs it.
+const LINT_FAMILY = /^(?:pre|post)?lint(?::|$)/;
+const FIX_VARIANT = /(?:^|:)fix(?::|$)/;
+const RUNNERS = new Set(["npm", "pnpm", "yarn", "bun"]);
 
 // A run-s / run-p / npm-run-all pattern as a regex: * matches within one
 // `:` segment, ** across segments.
@@ -70,26 +82,34 @@ function globToRegex(glob) {
   return new RegExp(`^${body}$`);
 }
 
-// The scripts a command runs: `npm run x`, `npm run-script x`, and the
-// arguments of run-s, run-p and npm-run-all, up to their `--`.
+// The scripts a command runs: `<npm|pnpm|yarn|bun> [flags] run x`, the
+// arguments of run-s, run-p and npm-run-all up to their `--`, concurrently's
+// npm:<script>, and a quoted command (concurrently "npm run a", sh -c '...').
 function calledScripts(cmd, names) {
   const called = [];
-  for (const part of cmd.split(/&&|\|\||[;|]/)) {
-    const words = (part.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((w) =>
-      w.replace(/^["']|["']$/g, ""),
-    );
+  const matching = (glob) => {
+    const pattern = globToRegex(glob);
+    return names.filter((name) => pattern.test(name));
+  };
+  for (const part of segments(cmd)) {
+    const raw = part.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    const words = raw.map((w) => w.replace(/^["']|["']$/g, ""));
     for (let i = 0; i < words.length; i++) {
-      if (words[i] === "npm" && (words[i + 1] === "run" || words[i + 1] === "run-script")) {
-        const name = words.slice(i + 2).find((w) => !w.startsWith("-"));
-        if (name) called.push(name);
+      const word = words[i];
+      if (/^["']/.test(raw[i]) && /\s/.test(word)) called.push(...calledScripts(word, names));
+      if (word.startsWith("npm:")) called.push(...matching(word.slice(4)));
+      if (RUNNERS.has(word)) {
+        const rest = words.slice(i + 1).filter((w) => !w.startsWith("-"));
+        if ((rest[0] === "run" || rest[0] === "run-script") && rest[1]) {
+          called.push(...matching(rest[1]));
+        }
       }
-      if (["run-s", "run-p", "npm-run-all"].includes(words[i])) {
+      if (["run-s", "run-p", "npm-run-all"].includes(word)) {
         for (const arg of words.slice(i + 1)) {
           if (arg === "--") break;
           if (arg.startsWith("-")) continue;
           // "build-only {@}": the first word is the script, the rest its arguments.
-          const pattern = globToRegex(arg.split(/\s+/)[0]);
-          called.push(...names.filter((name) => pattern.test(name)));
+          called.push(...matching(arg.split(/\s+/)[0]));
         }
       }
     }
@@ -97,20 +117,29 @@ function calledScripts(cmd, names) {
   return called;
 }
 
-// The scripts `npm run lint` reaches that fix instead of report: lint itself,
-// npm's pre and post hooks around each script it runs, and the scripts it
-// calls. A lint:fix helper that lint never runs is not flagged.
+// The scripts that fix instead of report and that `npm run lint` runs or
+// likely runs: the lint family by name, plus every script lint reaches
+// (npm's pre and post hooks around each, and the scripts it calls), so a
+// lint:fix that lint does run is caught. In package.json order.
 export function fixingLint(scripts) {
   const names = Object.keys(scripts);
-  const reached = [];
-  const queue = ["lint"];
+  const family = names.filter((n) => LINT_FAMILY.test(n) && !FIX_VARIANT.test(n));
+  const flagged = new Set(family);
+  const reached = new Set();
+  // Start from lint and the rest of the family, since lint likely runs them too.
+  const queue = ["lint", ...family].map((name) => ({ name, hook: false }));
   while (queue.length) {
-    const name = queue.shift();
-    if (!Object.hasOwn(scripts, name) || reached.includes(name)) continue;
-    reached.push(name);
-    queue.push(`pre${name}`, `post${name}`, ...calledScripts(scripts[name], names));
+    const { name, hook } = queue.shift();
+    if (!Object.hasOwn(scripts, name) || reached.has(name)) continue;
+    reached.add(name);
+    flagged.add(name);
+    // npm runs prelint and postlint, but never a hook's own hooks.
+    if (!hook) queue.push({ name: `pre${name}`, hook: true }, { name: `post${name}`, hook: true });
+    if (typeof scripts[name] === "string") {
+      queue.push(...calledScripts(scripts[name], names).map((n) => ({ name: n, hook: false })));
+    }
   }
-  return reached.filter((name) => FIXES.test(scripts[name]));
+  return names.filter((name) => flagged.has(name) && fixes(scripts[name]));
 }
 
 function main() {
