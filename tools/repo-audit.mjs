@@ -226,6 +226,9 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
 // to find, and an empty rule list in its place would be a false red. unread
 // is set when no admin token exists for the owner: then that one sentence,
 // naming the missing secret, is the repo's only token finding.
+// privateReporting is also "n/a" on a private or archived repo, where there is
+// nothing to check. Its read needs only Metadata (read), so on its own an
+// unread value is GitHub not answering, not a token short of Administration.
 export function checkBaseline({
   securityUpdates,
   alerts,
@@ -252,10 +255,7 @@ export function checkBaseline({
       findings.push(["baseline", "Push protection is off."]);
     }
   }
-  // n/a: a private repo (GitHub offers no private reporting there) or an
-  // archived one (read-only, so nothing to report against).
-  if (privateReporting == null) unreadable.push("private vulnerability reporting");
-  else if (privateReporting === false) {
+  if (privateReporting === false) {
     findings.push([
       "baseline",
       "Private vulnerability reporting is off; the security policy points reporters to it. Run apply.mjs settings.",
@@ -293,9 +293,15 @@ export function checkBaseline({
   }
   if (unread) findings.push(["token", unread]);
   else if (unreadable.length) {
+    if (privateReporting == null) unreadable.push("private vulnerability reporting");
     findings.push([
       "token",
       `The token cannot read: ${unreadable.join(", ")}. It needs Administration (read) on this repo.`,
+    ]);
+  } else if (privateReporting == null) {
+    findings.push([
+      "token",
+      "GitHub did not answer the private vulnerability reporting read. It needs only Metadata (read), so rerun before changing the token.",
     ]);
   }
   return findings;
@@ -612,8 +618,9 @@ const CODE_SCANNING_OFF = /code scanning is not enabled/i;
 // Admin readability is decided once: meta.security_and_analysis is present
 // only when the token that fetched meta has admin access, and main fetches
 // meta with the admin token. Without it every settings field is null
-// (unreadable) and the settings endpoints are not called, because their 404
-// would be ambiguous. With it, a 404 on either Dependabot endpoint means off.
+// (unreadable, or "n/a" for private reporting on a private or archived repo)
+// and the settings endpoints are not called, because their 404 would be
+// ambiguous. With it, a 404 on either Dependabot endpoint means off.
 // Dependabot alerts and security updates, read with an admin token. A 404 on
 // either means off; any other failure is null (unread).
 export async function readDependabot(repo, admin) {
@@ -633,10 +640,17 @@ export async function readDependabot(repo, admin) {
 }
 
 // Private vulnerability reporting, read with the admin token like the other
-// settings. 200 carries { enabled }; any other answer is null (unread).
+// settings. 200 carries { enabled }; a 401, 403 or 404 is null (unread). A 422
+// is GitHub's "Repository must be public and not archived": the repo changed
+// after meta was read, so it is n/a, never an error that sinks the whole repo.
 export async function readPrivateReporting(repo, admin) {
-  const res = await request(`/repos/${repo}/private-vulnerability-reporting`, admin);
-  return res.status === 200 && typeof res.body?.enabled === "boolean" ? res.body.enabled : null;
+  try {
+    const res = await request(`/repos/${repo}/private-vulnerability-reporting`, admin);
+    return res.status === 200 && typeof res.body?.enabled === "boolean" ? res.body.enabled : null;
+  } catch (error) {
+    if (error.message.startsWith("GitHub API 422 ")) return "n/a";
+    throw error;
+  }
 }
 
 export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {

@@ -881,12 +881,13 @@ const SETTINGS_ON = [
   [/\/code-scanning\/default-setup$/, 200, { state: "not-configured" }],
 ];
 
-test("fetchRepoData: private reporting off is a baseline finding; any answer but 200 is unreadable", async () => {
+test("fetchRepoData: private reporting off is a finding; 401, 403, 404 or no answer is unread; 422 is n/a", async () => {
   for (const [status, body, want] of [
     [200, { enabled: false }, false],
     [404, undefined, null],
     [403, { message: "Must have admin rights to Repository." }, null],
     [200, {}, null],
+    [422, { message: "Repository must be public and not archived" }, "n/a"],
   ]) {
     const stub = stubFetch([
       [/\/private-vulnerability-reporting$/, status, body],
@@ -904,9 +905,16 @@ test("fetchRepoData: private reporting off is a baseline finding; any answer but
             "Private vulnerability reporting is off; the security policy points reporters to it. Run apply.mjs settings.",
           ],
         ]);
+      } else if (want === "n/a") {
+        assert.deepEqual(findings, []);
       } else {
-        assert.deepEqual(kinds(findings), ["token"]);
-        assert.match(findings[0][1], /private vulnerability reporting/);
+        // Alone, it is GitHub not answering: never the Administration sentence.
+        assert.deepEqual(findings, [
+          [
+            "token",
+            "GitHub did not answer the private vulnerability reporting read. It needs only Metadata (read), so rerun before changing the token.",
+          ],
+        ]);
       }
     } finally {
       stub.restore();

@@ -1359,7 +1359,7 @@ test("planSettings: a private repo without GHAS gets Dependabot and merged branc
   );
 });
 
-test("planSettings: private reporting goes on only when read off; n/a is left alone, unread is a stop", () => {
+test("planSettings: private reporting goes on only when read off; n/a is left alone, unread is a note", () => {
   const settled = { ...SETTLED, codeScanning: { state: "not-configured", languages: [] } };
   assert.deepEqual(planSettings({ ...settled, privateReporting: false }).actions, [
     {
@@ -1374,11 +1374,14 @@ test("planSettings: private reporting goes on only when read off; n/a is left al
     actions: [],
     notes: [],
   });
+  // An unread value never blocks the settings the token can read and set.
   for (const unread of [null, undefined]) {
-    assert.deepEqual(planSettings({ ...settled, privateReporting: unread }), {
-      stops: ["The token cannot read this repo's settings; it needs admin on the repo."],
-      actions: [],
-      notes: [],
+    assert.deepEqual(planSettings({ ...settled, alerts: false, privateReporting: unread }), {
+      stops: [],
+      actions: [{ what: "Dependabot alerts on", method: "PUT", path: "/vulnerability-alerts" }],
+      notes: [
+        "GitHub did not answer the private vulnerability reporting read, so it is left as it is; rerun settings.",
+      ],
     });
   }
 });

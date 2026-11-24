@@ -402,7 +402,7 @@ it works, it joins the `dotnet` module; if not, the fallback is UI Automation te
    framework lands in a repo.
 2. **Unknown stack.** When a detection finds files no rule covers, the skill applies the covered modules, says so in a warning, and drafts the new module as a PR to Ward as its last step; it never applies a guessed config. Capacitor Android is the first expected case.
 3. **The audit.** The weekly `repo-audit` adds three checks per repo: baseline settings on (Dependabot,
-   secret scanning, CodeQL, ruleset), caller present on `@v1`, and no uncovered stack. It compares the
+   secret scanning, private vulnerability reporting, CodeQL, ruleset), caller present on `@v1`, and no uncovered stack. It compares the
    caller's inputs on `main` with what the repo's stacks need, so a merged PR that turned a module off
    shows up, and it lists every `NuGetAuditSuppress` with its dated reason. It also reports runtimes near
    end of life — .NET 8 and 9 end on 2026-11-10.

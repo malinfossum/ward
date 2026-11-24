@@ -655,10 +655,11 @@ export function planSettings(
   { job = false, languages = [], isPrivate = false, withoutGhas = false, deleteBranchOnMerge } = {},
 ) {
   const { alerts, securityUpdates, analysis, codeScanning, privateReporting } = baseline;
-  // privateReporting is "n/a" on a private or archived repo, so it never stops one.
+  // privateReporting stays out: its read needs only Metadata (read), so an
+  // unread value says nothing about the token, and the rest can still be set.
   const needed = withoutGhas
-    ? [alerts, securityUpdates, privateReporting]
-    : [alerts, securityUpdates, analysis, codeScanning, privateReporting];
+    ? [alerts, securityUpdates]
+    : [alerts, securityUpdates, analysis, codeScanning];
   if (needed.some((value) => value == null)) {
     const stop = "The token cannot read this repo's settings; it needs admin on the repo.";
     return { stops: [stop], actions: [], notes: [] };
@@ -690,12 +691,17 @@ export function planSettings(
   }
   // The security policy in malinfossum/.github sends reporters to the Security
   // tab's "Report a vulnerability"; this is what makes that button appear.
+  // "n/a" (a private or archived repo) is left alone.
   if (privateReporting === false) {
     actions.push({
       what: "private vulnerability reporting on",
       method: "PUT",
       path: "/private-vulnerability-reporting",
     });
+  } else if (privateReporting == null) {
+    notes.push(
+      "GitHub did not answer the private vulnerability reporting read, so it is left as it is; rerun settings.",
+    );
   }
   if (deleteBranchOnMerge === false) {
     actions.push({
