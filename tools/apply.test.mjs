@@ -697,18 +697,42 @@ test("an Astro repo gets astro check; a repo without Biome gets lint and a note"
 // create-vue's layout: a root tsconfig.json that only holds references.
 const REFS = JSON.stringify({ files: [], references: [{ path: "./tsconfig.app.json" }] });
 
-test("a create-vue repo reuses its type-check script instead of a tsc that checks nothing", () => {
-  const manifest = {
-    name: "x",
-    scripts: { lint: "biome ci .", test: "vitest run", "type-check": "vue-tsc --build" },
-    devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" },
+test("a repo's own type-check is offered beside the checker, never reused unread", () => {
+  const scripts = { lint: "biome ci .", test: "vitest run" };
+  const vue = { "vue-tsc": "3.3.11", typescript: "6.0.0" };
+  const planFor = (more, deps, tsconfig) => {
+    const manifest = { name: "x", scripts: { ...scripts, ...more }, devDependencies: deps };
+    return planFiles(
+      repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": tsconfig }),
+      {
+        templates,
+      },
+    );
   };
-  const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": REFS });
-  const plan = planFiles(dir, { templates });
-  const edit = plan.files.find((f) => f.action === "edit");
-  assert.equal(edit.detail, "scripts: typecheck");
-  assert.match(edit.content, /"typecheck": "npm run type-check --"/);
-  assert.deepEqual(plan.notes, []);
+  // create-vue's type-check works, but one that checks nothing would pass the same.
+  for (const own of ["vue-tsc --build", "vue-tsc --noEmit", "echo ok"]) {
+    const plan = planFor({ "type-check": own }, vue, REFS);
+    const edit = plan.files.find((f) => f.action === "edit");
+    assert.equal(edit.detail, "scripts: typecheck");
+    assert.equal(JSON.parse(edit.content).scripts.typecheck, "vue-tsc --build --force");
+    assert.equal(
+      plan.notes[0],
+      'typecheck runs vue-tsc --build --force: change it to "npm run type-check --" if the repo\'s type-check checks the files.',
+    );
+  }
+  // Astro's checker is astro check, so a type-check there is not offered.
+  const astro = planFor(
+    { "type-check": "tsc" },
+    { astro: "7.3.5", "@astrojs/check": "1.0.0" },
+    "{}",
+  );
+  assert.ok(!astro.notes.some((n) => n.includes("npm run type-check")), astro.notes.join("\n"));
+  // Svelte on a solution root asks, and the ask offers the type-check too.
+  const svelte = planFor({ "type-check": "svelte-check" }, { svelte: "5.43.0" }, REFS);
+  assert.equal(
+    file(svelte, "package.json").detail,
+    'add a "typecheck" script that runs svelte-check on the tsconfig that holds the app, or one that runs "npm run type-check --" if the repo\'s type-check checks the files',
+  );
 });
 
 test("a Vue repo gets vue-tsc before it is installed, with a note to add it", () => {
@@ -859,7 +883,7 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
   const vue = { ...ts, vue: "3.5.0", "vue-tsc": "3.3.11" };
   assert.equal(
     file(planFor(vue, REFS, { "type-check": "vue-tsc --build" }), "package.json").detail,
-    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "vue-tsc --build --force", or change it to "npm run type-check --" if type-check checks them',
+    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "vue-tsc --build --force", or change it to "npm run type-check --" if the repo\'s type-check checks the files',
   );
   // The fix names the package it needs, Svelte on a solution root included.
   const svelteRoot = planFor({ ...ts, svelte: "5.43.0" }, REFS);
@@ -873,7 +897,7 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
   const offered = planFor({ ...ts, svelte: "5.43.0" }, REFS, { "type-check": "svelte-check" });
   assert.match(
     file(offered, "package.json").detail,
-    /holds the app, or change it to "npm run type-check --" if type-check checks them$/,
+    /holds the app, or change it to "npm run type-check --" if the repo's type-check checks the files$/,
   );
   const svelte = planFor({ ...ts, svelte: "5.43.0" }, "{}");
   assert.match(file(svelte, "package.json").detail, /change it to "svelte-check --tsconfig/);
@@ -912,6 +936,60 @@ test("a node input naming a folder without package.json is a stop", async () => 
     assert.deepEqual(settled.stops, []);
     assert.equal(file(settled, "a/package.json").action, "keep");
   }
+  // Repeated slashes name it too, and ./ alone is the root.
+  for (const node of ["a//", ".//a", "./a/"]) {
+    const spelled = repo({ "a/package.json": PKG, [CALLER]: caller({ node }) });
+    const settled = planFiles(spelled, { templates });
+    assert.deepEqual(settled.stops, [], node);
+    assert.equal(file(settled, CALLER).action, "keep", node);
+  }
+  const root = planFiles(repo({ "package.json": PKG, [CALLER]: caller({ node: "./" }) }), {
+    templates,
+  });
+  assert.deepEqual([root.stops, file(root, CALLER).action], [[], "keep"]);
+  // A leading / is the runner's filesystem root, never the repo's.
+  const absolute = planFiles(repo({ "package.json": PKG, [CALLER]: caller({ node: "/" }) }), {
+    templates,
+  });
+  assert.deepEqual(
+    [file(absolute, CALLER).action, file(absolute, CALLER).detail],
+    ["drift", 'node is "/", the files say "."'],
+  );
+});
+
+test("the caller's node folder wins over a shallower package.json, and edits go to its manifest", () => {
+  const files = {
+    "package.json": JSON.stringify({ name: "tools", private: true }),
+    "web/package.json": PKG,
+    "web/tsconfig.json": "{}",
+  };
+  const plan = planFiles(repo({ ...files, [CALLER]: caller({ node: "web" }) }), { templates });
+  assert.equal(plan.inputs.node, "web");
+  assert.deepEqual(plan.stops, []);
+  assert.equal(file(plan, CALLER).action, "keep");
+  assert.equal(file(plan, "web/package.json").detail, "scripts: typecheck");
+  assert.equal(file(plan, "package.json"), undefined);
+  // A fresh repo has no caller to follow: the shallowest package.json still wins.
+  assert.equal(planFiles(repo(files), { templates }).inputs.node, ".");
+  // Kept off on purpose, node stays off whatever the caller says.
+  const reason = "Tooling only (2026-11-25).";
+  const off = planFiles(repo({ ...files, [CALLER]: caller({ node: "web" }) }), {
+    templates,
+    exceptions: { node: reason },
+  });
+  assert.equal(off.inputs.node, "");
+  assert.equal(file(off, "web/package.json"), undefined);
+});
+
+test("a package.json with a UTF-8 BOM is read, and the BOM stays on write", () => {
+  const text = `\uFEFF${PKG}\n`;
+  const dir = repo({ "package.json": text, "tsconfig.json": "{}" });
+  const plan = planFiles(dir, { templates });
+  assert.deepEqual(plan.stops, []);
+  const edit = file(plan, "package.json");
+  assert.equal(edit.detail, "scripts: typecheck");
+  assert.ok(edit.content.startsWith("\uFEFF{"));
+  assert.equal(JSON.parse(edit.content.slice(1)).scripts.typecheck, "tsc --noEmit");
 });
 
 test("a module in the exceptions stays off in the caller and is noted with its reason", () => {
@@ -1688,6 +1766,66 @@ test("settings, ruleset and automerge: an archived repo is a stop with no write,
   }
 });
 
+test("an empty repo reads as one with no files: every settings command gives a reading, not an error", async () => {
+  const stub = stubFetch(
+    bareRoutes([[/\/git\/trees\//, 409, { message: "Git Repository is empty." }, "GET"]]),
+  );
+  try {
+    const first = {};
+    for (const command of ["status", "settings", "ruleset", "automerge"]) {
+      const out = await runApply([command, "malinfossum/x"], ENV);
+      assert.ok(!out.lines.some((line) => line.startsWith("error")), out.lines.join("\n"));
+      first[command] = [out.exitCode, out.lines[0].split(" ")[0]];
+    }
+    // A ruleset would refuse the first push, and no ruleset requires the gate.
+    assert.deepEqual(first, {
+      status: [0, "status"],
+      settings: [0, "set"],
+      ruleset: [1, "stop"],
+      automerge: [1, "stop"],
+    });
+    // Nothing past the tree is read for files that are not there.
+    assert.ok(!stub.calls.some((c) => c.path.includes("/contents/")));
+  } finally {
+    stub.restore();
+  }
+  // With no code, default setup finds no language; the repo is new, not exempt.
+  // --no-codeql skips CodeQL's wait, never the first push.
+  const noLanguage = stubFetch(
+    bareRoutes([
+      [/\/git\/trees\//, 409, { message: "Git Repository is empty." }, "GET"],
+      [/\/code-scanning\/default-setup$/, 200, { state: "not-configured", languages: [] }, "GET"],
+      [/\/rulesets$/, 201, {}, "POST"],
+    ]),
+  );
+  try {
+    for (const flags of [[], ["--no-codeql", "--apply"]]) {
+      const out = await runApply(["ruleset", "malinfossum/x", ...flags], ENV);
+      assert.equal(out.exitCode, 1, flags.join(" "));
+      assert.deepEqual(out.lines, [
+        "stop    malinfossum/x has no commits yet, and the ruleset's pull-request rule would refuse the first push to main; push it first, then rerun.",
+      ]);
+    }
+    assert.deepEqual(noLanguage.writes(), []);
+  } finally {
+    noLanguage.restore();
+  }
+  // Any other 409 is still an error.
+  const other = stubFetch(
+    bareRoutes([[/\/git\/trees\//, 409, { message: "Something else." }, "GET"]]),
+  );
+  try {
+    const out = await runApply(["status", "malinfossum/x"], ENV);
+    assert.equal(out.exitCode, 1);
+    assert.equal(
+      out.lines[0],
+      "error   GitHub API 409 on the tree of malinfossum/x: Something else.",
+    );
+  } finally {
+    other.restore();
+  }
+});
+
 // A private repo of a personal account on GitHub Free, read with an admin token.
 const FREE_PRIVATE = [
   [
@@ -1760,10 +1898,10 @@ test("status prints one line with the state, and readState sees classic protecti
     const state = await readState("malinfossum/x", "t");
     assert.equal(state.classic, true);
     assert.deepEqual(state.dependabotPulls, [7]);
-    assert.equal(state.analysed, false);
+    assert.equal(state.analyzed, false);
     assert.equal(
       statusLine(state),
-      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled private-reporting=false default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
+      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled private-reporting=false default-setup=not-configured analyzed=false rulesets=0+classic rules=deletion,required_status_checks",
     );
     const { lines } = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(lines[0], `status  ${statusLine(state)}`);
@@ -1872,7 +2010,7 @@ const state = (over = {}) => ({
   rulesetsRead: true,
   rulesets: [],
   existing: null,
-  analysed: true,
+  analyzed: true,
   dependabotPulls: [],
   ...over,
 });
@@ -1888,15 +2026,15 @@ test("planRuleset: classic protection or two rulesets stop; no CodeQL analysis w
   );
   const two = planRuleset(state({ rulesets: [{ id: 1 }, { id: 2 }] }), RULESET);
   assert.match(two.stops[0], /More than one branch ruleset \(1, 2\)/);
-  const waiting = planRuleset(state({ analysed: false }), RULESET);
-  assert.match(waiting.wait, /CodeQL has not analysed main yet/);
+  const waiting = planRuleset(state({ analyzed: false }), RULESET);
+  assert.match(waiting.wait, /CodeQL has not analyzed main yet/);
   assert.equal(waiting.action, "");
   const noLanguage = state({
-    analysed: false,
+    analyzed: false,
     baseline: { rules: [], codeScanning: { languages: [] } },
   });
-  assert.match(planRuleset(noLanguage, RULESET).wait, /never analyse it; rerun with --no-codeql/);
-  const skipped = planRuleset(state({ analysed: false }), RULESET, { noCodeql: true });
+  assert.match(planRuleset(noLanguage, RULESET).wait, /never analyze it; rerun with --no-codeql/);
+  const skipped = planRuleset(state({ analyzed: false }), RULESET, { noCodeql: true });
   assert.equal(skipped.action, "create");
   assert.ok(!types(skipped.body).includes("code_scanning"));
 });
@@ -1962,7 +2100,7 @@ test("ruleset command: POST when none, PUT by id when one, nothing without --app
   try {
     const wait = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
     assert.equal(wait.exitCode, 1);
-    assert.ok(wait.lines[0].startsWith("wait    CodeQL has not analysed main yet"));
+    assert.ok(wait.lines[0].startsWith("wait    CodeQL has not analyzed main yet"));
     assert.deepEqual(waiting.writes(), []);
   } finally {
     waiting.restore();

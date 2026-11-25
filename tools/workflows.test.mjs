@@ -277,7 +277,7 @@ test("no template carries an em dash", () => {
 
 const CODEQL = ".github/workflows/codeql.yml";
 
-test("codeql.yml analyses every language buildless and runs nothing else where it can write", () => {
+test("codeql.yml analyzes every language buildless and runs nothing else where it can write", () => {
   const text = readWorkflow(CODEQL);
   const inits = text.split(/^ {6}- /m).filter((step) => /codeql-action\/init@/.test(step));
   assert.ok(inits.length > 0, "no init step found");

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { BOM } from "./json.mjs";
 import {
   api,
   checkLinks,
@@ -84,6 +85,7 @@ test("manifestVersion reads package.json and pyproject.toml", () => {
   assert.equal(manifestVersion({ "package.json": '{"version":"0.2.0-dev"}' }), "0.2.0-dev");
   assert.equal(manifestVersion({ "pyproject.toml": 'name = "x"\nversion = "0.6.0"\n' }), "0.6.0");
   assert.equal(manifestVersion({}), "");
+  assert.equal(manifestVersion({ "package.json": `${BOM}{"version":"1.0.0"}` }), "1.0.0");
 });
 
 test("compareVersions orders releases, tags and prereleases", () => {

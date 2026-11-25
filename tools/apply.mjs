@@ -19,12 +19,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
 import { git } from "./git.mjs";
+import { BOM, parseJson } from "./json.mjs";
 import { planSteps } from "./node-contract.mjs";
 import {
+  bareDir,
   CODEQL_PINNED,
   exceptionsFor,
   fetchRepoData,
   indentOf,
+  manifestIn,
   parseCaller,
   REQUIRED_CHECK,
   readDependabot,
@@ -293,16 +296,25 @@ export function listTree(dir, stacks) {
   return (gitFiles(dir) ?? walked()).filter((path) => !ignored(path, stacks.ignore)).sort();
 }
 
-// The type check a repo's own setup calls for, null when that is mine to pick.
-// A type-check script (create-vue names it so) is reused rather than copied.
-// A check script is not: the name is too common to trust (it may lint, or run
-// every step), and SvelteKit's own check runs what checkerFor writes anyway.
-function typecheckFor(deps, scripts, tsconfig) {
-  if (!("astro" in deps) && Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
-  return checkerFor(deps, tsconfig);
-}
+// A type-check script (create-vue names it so) may check the files already,
+// but whether it does is mine to judge, so apply writes the checker and only
+// offers the script. A check script is not even offered: the name is too
+// common to trust (it may lint, or run every step), and SvelteKit's own check
+// runs what checkerFor writes anyway. Astro's astro check is the checker.
+// One wording wherever it is offered: a drift's fix, an ask, a note.
+const OFFER = `"npm run type-check --" if the repo's type-check checks the files`;
+const ownTypecheck = (deps, scripts) => !("astro" in deps) && Object.hasOwn(scripts, "type-check");
 
-// The checker itself, before any script of the repo's own is reused.
+// svelte-check on a solution-style root is the one typecheck apply cannot
+// write (checkerFor's null): which tsconfig holds the app is mine to name.
+const UNPICKED = {
+  needs: "svelte-check",
+  ask: 'add a "typecheck" script that runs svelte-check on the tsconfig that holds the app',
+  fix: "point svelte-check at the tsconfig that holds the app",
+  note: "typecheck: svelte-check reads one tsconfig, and the module's tsconfig.json only holds references. Name the one that holds the app (the Vite template's check script runs svelte-check --tsconfig ./tsconfig.app.json).",
+};
+
+// The checker a module gets, null when that is mine to pick (UNPICKED).
 // vue-tsc and svelte-check are the only checkers that read .vue and .svelte
 // files, so a repo gets one even before it is installed. A solution-style
 // tsconfig.json (the Vite and create-vue layout: "files": [] and references)
@@ -374,13 +386,10 @@ function staleTypecheck(deps, scripts, tsconfig) {
   ].filter(Boolean);
   if (!misses.length) return null;
   const checker = checkerFor(deps, tsconfig);
-  const own = typecheckFor(deps, scripts, tsconfig);
-  const fix = checker
-    ? `change it to "${checker}"`
-    : "point svelte-check at the tsconfig that holds the app";
-  const offer = own !== checker ? `, or change it to "${own}" if type-check checks them` : "";
+  const fix = checker ? `change it to "${checker}"` : UNPICKED.fix;
+  const offer = ownTypecheck(deps, scripts) ? `, or change it to ${OFFER}` : "";
   const detail = `typecheck is "tsc --noEmit", which ${misses.join(" and ")}: ${fix}${offer}`;
-  return { detail, needs: checker ?? "svelte-check" };
+  return { detail, needs: checker ?? UNPICKED.needs };
 }
 
 // tsconfig.json is JSONC: a commented-out "references" line, or an empty
@@ -418,15 +427,16 @@ function withoutComments(text) {
 
 const SCRIPT_FOR = {
   lint: () => "biome ci .",
-  typecheck: typecheckFor,
+  typecheck: (deps, tsconfig) => checkerFor(deps, tsconfig),
   "deploy:check": () => "wrangler deploy --dry-run",
 };
 
 // The scripts the node contract requires and package.json lacks, with the
 // standard command for each. test is never guessed: the runner is mine to
-// pick. A note names the package a script needs; nothing is installed here.
-// tsconfig is the text of the module's tsconfig.json, "" when it has none.
-// stale is a typecheck script that misses files, for me to settle by hand.
+// pick. Each ask carries its detail. A note names the package a script needs;
+// nothing is installed here. tsconfig is the text of the module's
+// tsconfig.json, "" when it has none. stale is a typecheck script that misses
+// files, for me to settle by hand.
 export function missingScripts(pkg, files, tsconfig = "") {
   const scripts = pkg.scripts ?? {};
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
@@ -434,23 +444,27 @@ export function missingScripts(pkg, files, tsconfig = "") {
   const add = {};
   const ask = [];
   const notes = [];
+  const offer = ownTypecheck(deps, scripts);
   for (const name of missing) {
-    const command = SCRIPT_FOR[name]?.(deps, scripts, tsconfig);
+    const command = SCRIPT_FOR[name]?.(deps, tsconfig);
     if (command) add[name] = command;
-    else ask.push(name);
+    else if (name !== "typecheck") {
+      ask.push({ name, detail: `add a "${name}" script; the runner is yours to choose` });
+    } else {
+      const or = offer ? `, or one that runs ${OFFER}` : "";
+      ask.push({ name, detail: `${UNPICKED.ask}${or}` });
+      notes.push(UNPICKED.note);
+    }
   }
-  // Only svelte-check on a solution-style root leaves typecheck unguessed.
-  const svelteAsk = ask.includes("typecheck") && "svelte" in deps && isSolution(tsconfig);
-  if (svelteAsk) {
-    notes.push(
-      "typecheck: svelte-check reads one tsconfig, and the module's tsconfig.json only holds references. Name the one that holds the app (the Vite template's check script runs svelte-check --tsconfig ./tsconfig.app.json).",
-    );
+  const unpicked = ask.some((a) => a.name === "typecheck");
+  if (add.typecheck && offer) {
+    notes.push(`typecheck runs ${add.typecheck}: change it to ${OFFER}.`);
   }
   if (add.lint && !("@biomejs/biome" in deps)) {
     notes.push("lint runs Biome: add @biomejs/biome as a devDependency and a biome.json first.");
   }
   const stale = staleTypecheck(deps, scripts, tsconfig);
-  const runs = add.typecheck ?? stale?.needs ?? (svelteAsk ? "svelte-check" : "");
+  const runs = add.typecheck ?? stale?.needs ?? (unpicked ? UNPICKED.needs : "");
   // A drift's fix is not in the repo yet, so its notes say whose command it is.
   const subject = stale && !add.typecheck ? "the typecheck fix runs" : "typecheck runs";
   const install = installNote(runs, deps, subject);
@@ -466,13 +480,14 @@ export function missingScripts(pkg, files, tsconfig = "") {
   return { add, ask, notes, stale: stale?.detail ?? null };
 }
 
-// package.json with the scripts added, in the file's own indentation and
-// line endings.
+// package.json with the scripts added, in the file's own indentation, line
+// endings and BOM.
 export function withScripts(text, add) {
-  const pkg = JSON.parse(text);
+  const pkg = parseJson(text);
   pkg.scripts = { ...(pkg.scripts ?? {}), ...add };
   const indent = text.match(/^(\t| +)"/m)?.[1] ?? "  ";
-  const out = `${JSON.stringify(pkg, null, indent)}\n`;
+  const bom = text.startsWith(BOM) ? BOM : "";
+  const out = `${bom}${JSON.stringify(pkg, null, indent)}\n`;
   return text.includes("\r\n") ? out.replaceAll("\n", "\r\n") : out;
 }
 
@@ -541,8 +556,8 @@ export function addCodeqlJob(text, template) {
   return lines.join(eol);
 }
 
-// `./web`, `web` and `web/` are one directory; `./` alone is the root.
-const bare = (value) => (value ?? "").replace(/^\.\//, "").replace(/\/$/, "") || ".";
+// The audit reads caller inputs the same way: one normalizer for both.
+const bare = bareDir;
 const sameDir = (a, b) => bare(a.replace(/^\//, "")) === bare(b.replace(/^\//, ""));
 
 // `dotnet: "."` next to a planned `App.slnx` at the root is the same choice.
@@ -648,10 +663,17 @@ function applyExceptions(inputs, stacks, exceptions, stops) {
 // beside it (the startup project with the EF project) follows the caller too,
 // "" when the caller leaves it out, as planCaller reads it. A tie for an input
 // the caller does not mention, or a caller that does not call Ward, stays a
-// stop. The stops that remain come back; inputs is changed in place.
-function settleByCaller(text, inputs, stops) {
+// stop. The caller's node folder wins without a tie too, when it holds a
+// package.json: detection picks the shallowest one, and beside a root one that
+// only holds tooling, a caller running web/ means web/, so the scripts belong
+// in web/package.json. A caller folder without one is drift against the files
+// (the module moved), and node kept off (exceptions) stays off. The stops that
+// remain come back; inputs is changed in place.
+function settleByCaller(text, inputs, stops, { exceptions, paths }) {
   const current = text == null ? null : parseCaller(lf(text));
   if (!current) return stops;
+  const node = current.inputs.node;
+  if (node && !exceptions.node && paths.includes(manifestIn(bare(node)))) inputs.node = node;
   return stops.filter((stop) => {
     if (!Object.hasOwn(current.inputs, stop.inputs[0])) return true;
     for (const key of stop.inputs) inputs[key] = current.inputs[key] ?? DEFAULTS[key];
@@ -683,6 +705,7 @@ export function planFiles(
     callerText,
     inputs,
     planned.stops.filter((stop) => !exceptions[stop.module]),
+    { exceptions, paths },
   );
   files.push(planCaller(callerText, inputs, templates.caller, { isPrivate }));
   if (isPrivate) {
@@ -708,7 +731,7 @@ export function planFiles(
   if (inputs.node) {
     // A caller may write the folder as ./web or web/, the same working-directory to ci.yml.
     const node = bare(inputs.node);
-    const manifest = node === "." ? "package.json" : `${node}/package.json`;
+    const manifest = manifestIn(node);
     const text = read(manifest);
     let pkg = null;
     if (text == null) {
@@ -720,7 +743,7 @@ export function planFiles(
     } else {
       let parsed;
       try {
-        parsed = JSON.parse(text);
+        parsed = parseJson(text);
       } catch {
         stops.push({ module: "node", text: `${manifest} is not valid JSON.` });
       }
@@ -742,13 +765,7 @@ export function planFiles(
         const detail = `scripts: ${names.join(", ")}`;
         files.push({ path: manifest, action: "edit", detail, content: withScripts(text, add) });
       }
-      for (const name of ask) {
-        const detail =
-          name === "typecheck"
-            ? 'add a "typecheck" script that runs svelte-check on the tsconfig that holds the app'
-            : `add a "${name}" script; the runner is yours to choose`;
-        files.push({ path: manifest, action: "ask", detail });
-      }
+      for (const { detail } of ask) files.push({ path: manifest, action: "ask", detail });
       if (stale) files.push({ path: manifest, action: "drift", detail: stale });
       if (!names.length && !ask.length && !stale) {
         files.push({ path: manifest, action: "keep" });
@@ -778,13 +795,14 @@ export function writeFiles(dir, plan, written = []) {
 // admin on the repo (locally, gh auth token). The baseline comes from the
 // same reads the audit makes, so what apply sets is what the audit checks.
 // metaOnlyIfArchived: a command that writes stops on an archived repo, so it
-// needs nothing past meta there, and a later read (the tree of an empty repo
-// answers 409) must not hide that stop behind an error.
+// needs nothing past meta there, and no later read can hide that stop behind
+// an error.
 export async function readState(repo, token, { metaOnlyIfArchived = false } = {}) {
   const meta = (await request(`/repos/${repo}`, token)).body;
   if (!meta) throw new Error(`Cannot read ${repo}; the token must be allowed to see it.`);
   if (metaOnlyIfArchived && meta.archived === true) return { repo, meta };
-  const data = await fetchRepoData(meta, { admin: token, read: token });
+  // An empty repo reads as one with no files: its settings and ruleset need none.
+  const data = await fetchRepoData(meta, { admin: token, read: token, emptyOk: true });
   // A private repo without GitHub Advanced Security (any private repo of a
   // personal account on GitHub Free) has no security_and_analysis block, even
   // for an admin, so fetchRepoData reads no settings. Dependabot's two answer.
@@ -814,6 +832,7 @@ export async function readState(repo, token, { metaOnlyIfArchived = false } = {}
     // The default branch's files and caller: where settings looks for the codeql
     // job and the languages it will scan when no --dir is given.
     tree: data.tree,
+    empty: data.empty,
     caller: data.caller,
     classic,
     // Classic protection reads 401 or 403 without admin, which would pass for "none":
@@ -821,7 +840,7 @@ export async function readState(repo, token, { metaOnlyIfArchived = false } = {}
     rulesetsRead: listed.status === 200 && ![401, 403].includes(protection.status),
     rulesets,
     existing,
-    analysed: Array.isArray(analyses) && analyses.length > 0,
+    analyzed: Array.isArray(analyses) && analyses.length > 0,
     dependabotPulls: pulls.filter((p) => p.user?.login === "dependabot[bot]").map((p) => p.number),
   };
 }
@@ -955,7 +974,7 @@ export function statusLine(state) {
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
     `private-reporting=${state.baseline.privateReporting ?? "unread"}`,
     `default-setup=${state.baseline.codeScanning?.state ?? "unread"}`,
-    `analysed=${state.analysed}`,
+    `analyzed=${state.analyzed}`,
     `rulesets=${state.rulesetsRead ? state.rulesets.length : "unread"}${state.classic ? "+classic" : ""}`,
     `rules=${rules ? types.join(",") || "none" : "unread"}`,
   ].join(" ");
@@ -1197,13 +1216,21 @@ export function planRuleset(state, template, { bypassAdmin = false, noCodeql = f
     const ids = state.rulesets.map((r) => r.id).join(", ");
     stops.push(`More than one branch ruleset (${ids}); keep one, delete the rest, rerun.`);
   }
+  // With no commits, the first push is itself a push to the default branch,
+  // which the pull-request rule refuses, whatever the flags. An empty repo has
+  // no language for CodeQL either, only because it has no code yet.
+  if (state.empty) {
+    stops.push(
+      `${state.repo} has no commits yet, and the ruleset's pull-request rule would refuse the first push to ${state.branch}; push it first, then rerun.`,
+    );
+  }
   if (stops.length) return { stops, wait: "", action: "", body: null };
-  if (!noCodeql && !state.analysed) {
+  if (!noCodeql && !state.analyzed) {
     // A repo CodeQL has no language for never gets an analysis; waiting would never end.
     const none = state.baseline.codeScanning?.languages?.length === 0;
     const wait = none
-      ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
-      : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
+      ? `CodeQL has no language to analyze on ${state.branch}, so it will never analyze it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
+      : `CodeQL has not analyzed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
     return { stops, wait, action: "", body: null };
   }
   const body = mergeRuleset(template, state.existing, { bypassAdmin, noCodeql });

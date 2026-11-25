@@ -12,6 +12,7 @@
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parseJson } from "./json.mjs";
 
 const API = "https://api.github.com";
 
@@ -138,7 +139,7 @@ export function manifestDeps(files) {
   const found = new Set();
   const pkg = files["package.json"];
   if (pkg) {
-    const parsed = JSON.parse(pkg);
+    const parsed = parseJson(pkg);
     for (const group of ["dependencies", "devDependencies"]) {
       for (const name of Object.keys(parsed[group] || {})) {
         if (NOTABLE.has(name)) found.add(DISPLAY[name] || name);
@@ -158,7 +159,7 @@ export function manifestDeps(files) {
 
 export function manifestVersion(files) {
   const pkg = files["package.json"];
-  if (pkg) return JSON.parse(pkg).version || "";
+  if (pkg) return parseJson(pkg).version || "";
   const toml = files["pyproject.toml"];
   if (toml) {
     const m = toml.match(/^version\s*=\s*"([^"]+)"/m);

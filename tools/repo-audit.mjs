@@ -152,6 +152,23 @@ export function checkCaller(text, { self, isPrivate = false }) {
 
 const sample = (files) => files.slice(0, 3).join(", ");
 
+// A caller input as the runner's working-directory reads it: `./web`, `web`,
+// `web/` and `.//web//` are one directory, and `./` alone is the root. apply
+// reads inputs the same way, so the two never disagree on a caller. A leading
+// `/` is the runner's filesystem root, never the repo's, so it stays (and
+// names nothing in the tree), and `..` stays too: the runner resolves it
+// through folders the tree may not have.
+export const bareDir = (value) => {
+  const text = value || ".";
+  const parts = text.split("/").filter((part) => part && part !== ".");
+  if (text.startsWith("/")) return `/${parts.join("/")}`;
+  return parts.join("/") || ".";
+};
+
+// The package.json a bareDir names, for apply and the audit alike.
+export const manifestIn = (dir) =>
+  dir === "." ? "package.json" : `${dir === "/" ? "" : dir}/package.json`;
+
 // A module the repo's files need must be on, and an input that is on must
 // point at something on the default branch. A merged PR that turned a module
 // off or moved a project shows up here. inputs is null when there is no caller;
@@ -194,12 +211,10 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
   }
   if (!inputs) return findings;
   const have = new Set(paths);
-  // `./web` and `web` are the same path; `./` alone is the root.
-  const bare = (input) => input.replace(/^\.\//, "") || ".";
   const node = inputs.node ?? "";
   if (node) {
-    const dir = bare(node);
-    const manifest = dir === "." ? "package.json" : `${dir.replace(/\/$/, "")}/package.json`;
+    const dir = bareDir(node);
+    const manifest = manifestIn(dir);
     if (!have.has(manifest)) {
       findings.push([
         "inputs",
@@ -209,8 +224,8 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
   }
   for (const key of ["dotnet", "powershell"]) {
     const value = inputs[key] ?? "";
-    if (!value || bare(value) === ".") continue;
-    const target = bare(value).replace(/\/$/, "");
+    if (!value || bareDir(value) === ".") continue;
+    const target = bareDir(value);
     const exists = have.has(target) || paths.some((path) => path.startsWith(`${target}/`));
     if (!exists) {
       findings.push(["inputs", `${key} points at ${value}, which is not on the default branch.`]);
@@ -221,9 +236,11 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
 
 // Each field is the API's answer, or null when the token could not read it
 // (no admin read, which fetchRepoData decides once per repo, a 401/403, or
-// anything but 200 for the branch rules). null is a warning,
-// never a pass: a false green here would hide exactly what the audit exists
-// to find, and an empty rule list in its place would be a false red. unread
+// anything but 200 for the branch rules). null is never a pass: a false green
+// here would hide exactly what the audit exists to find, and an empty rule
+// list in its place would be a false red. An unread setting is a token
+// finding (a warning on an org without an admin token); unread branch rules
+// are a read finding, which fails on every owner. unread
 // is set when no admin token exists for the owner: then that one sentence,
 // naming the missing secret, is the only token finding for its settings.
 // privateReporting is also "n/a" on a private or archived repo, where there is
@@ -270,10 +287,12 @@ export function checkBaseline({
     ]);
   }
   // The rules go through the read token, so the Administration sentence below
-  // never covers them, not even when no admin token is set.
+  // never covers them, not even when no admin token is set. Their kind is read,
+  // not token: every owner has a read token, so an org without an admin one
+  // must not soften this to a warning.
   if (rules == null) {
     findings.push([
-      "token",
+      "read",
       "GitHub did not answer the branch rules read. It goes through the read token (GITHUB_TOKEN), not the admin one, so rerun before changing a token.",
     ]);
   } else {
@@ -512,12 +531,14 @@ export function auditRepo(
   findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
   // A joint repo can defer a whole kind until the co-owner agrees, and a repo
   // kept off Ward on purpose defers it for good; the weekly warning keeps it
-  // visible and dated either way.
-  const deferred = findings.map(([kind, message]) =>
-    DEFERRABLE.includes(kind) && exceptions[kind]
-      ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[kind]})`]
-      : [kind, message],
-  );
+  // visible and dated either way. The branch rules read feeds only ruleset
+  // findings, so a ruleset deferral covers it failing too.
+  const deferred = findings.map(([kind, message]) => {
+    const key = kind === "read" ? "ruleset" : kind;
+    return DEFERRABLE.includes(key) && exceptions[key]
+      ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[key]})`]
+      : [kind, message];
+  });
   // A deferral with nothing left to defer is stale, or a later regression of
   // that kind would stay a warning for good. Unread settings give a token
   // finding, never a baseline one, so the baseline key is not judged then:
@@ -573,9 +594,11 @@ export function expectsAdminRead(owner, env) {
 }
 
 // The warning set for one owner: WARN_KINDS, minus token where admin read is
-// promised, plus the kinds --warn-kinds names for this run.
+// promised, plus the kinds --warn-kinds names for this run. ruleset brings
+// read along: the rules read feeds only ruleset findings, as with a deferral.
 export function warnKindsFor(owner, env, extra = []) {
   const kinds = new Set([...WARN_KINDS, ...extra]);
+  if (kinds.has("ruleset")) kinds.add("read");
   if (expectsAdminRead(owner, env)) kinds.delete("token");
   return kinds;
 }
@@ -597,7 +620,13 @@ function messageOf(text) {
 // setting; a write answers with its status, so the caller checks for a 2xx
 // before it says done. A read retries a transient 5xx (see retrying); a write
 // does not, since a repeated write could apply twice.
-export async function request(path, token, { method = "GET", body, retryDelayMs = 1000 } = {}) {
+// answers names more statuses that come back like a 404, for a caller that
+// reads one as an answer (an empty repo's tree is a 409).
+export async function request(
+  path,
+  token,
+  { method = "GET", body, retryDelayMs = 1000, answers = [] } = {},
+) {
   const send = () =>
     fetch(`${API}${path}`, {
       method,
@@ -611,7 +640,7 @@ export async function request(path, token, { method = "GET", body, retryDelayMs 
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   const res = method === "GET" ? await retrying(send, retryDelayMs) : await send();
-  const silent = res.status === 204 || [401, 403, 404].includes(res.status);
+  const silent = res.status === 204 || [401, 403, 404, ...answers].includes(res.status);
   if (res.status >= 400 && !silent) {
     // The API says why (a validation message on a 422); the first line of it
     // is the difference between a rerun and a search.
@@ -675,18 +704,29 @@ export async function readPrivateReporting(repo, admin) {
   }
 }
 
-export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
+const EMPTY_REPO = /repository is empty/i;
+
+// emptyOk: apply's commands read a repo with no commits yet, whose tree
+// answers 409 "Git Repository is empty.", as a repo with no files, since a
+// setting or a ruleset needs none. The audit does not pass it: a tree on a
+// public repo answers without a token, so there anything but 200 is a real
+// failure (a rate limit, or a repo with no commits yet), never "no files".
+export async function fetchRepoData(meta, { admin, read, stacks = loadStacks(), emptyOk = false }) {
   const repo = meta.full_name;
   const branch = encodeURIComponent(meta.default_branch);
-  const tree = await request(`/repos/${repo}/git/trees/${branch}?recursive=1`, read);
-  // A tree on a public repo answers without a token, so anything but 200 is a
-  // real failure (a rate limit, or a repo with no commits yet), never "no files".
-  if (tree.status !== 200) throw new Error(`GitHub API ${tree.status} on the tree of ${repo}`);
-  if (tree.body.truncated) {
+  const tree = await request(`/repos/${repo}/git/trees/${branch}?recursive=1`, read, {
+    answers: [409],
+  });
+  const empty = emptyOk && tree.status === 409 && EMPTY_REPO.test(tree.message ?? "");
+  if (!empty && tree.status !== 200) {
+    const why = tree.message ? `: ${tree.message}` : "";
+    throw new Error(`GitHub API ${tree.status} on the tree of ${repo}${why}`);
+  }
+  if (tree.body?.truncated) {
     console.log(`::warning::${repo}: the tree is truncated, stack detection may miss files`);
   }
-  const paths = tree.body.tree.filter((e) => e.type === "blob").map((e) => e.path);
-  const caller = await fetchFile(repo, ".github/workflows/ward.yml", read);
+  const paths = empty ? [] : tree.body.tree.filter((e) => e.type === "blob").map((e) => e.path);
+  const caller = empty ? null : await fetchFile(repo, ".github/workflows/ward.yml", read);
   const files = {};
   for (const path of paths.filter((p) => PROPS_OR_PROJECT.test(p) && !ignored(p, stacks.ignore))) {
     const text = await fetchFile(repo, path, read);
@@ -730,6 +770,7 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }
   return {
     repo,
     self: repo === WARD,
+    empty,
     isPrivate: meta.private === true,
     tree: paths,
     caller,

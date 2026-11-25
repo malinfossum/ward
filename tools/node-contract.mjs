@@ -6,6 +6,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { git } from "./git.mjs";
+import { parseJson } from "./json.mjs";
 
 const MODES = new Set(["off", "warn", "strict"]);
 
@@ -135,7 +136,7 @@ export function lintCheck(before, after) {
 
 function main() {
   const dir = process.argv[2] ?? ".";
-  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+  const pkg = parseJson(readFileSync(join(dir, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const { steps, missing } = planSteps({
     scripts: pkg.scripts ?? {},
