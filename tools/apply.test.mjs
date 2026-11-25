@@ -947,6 +947,14 @@ test("a node input naming a folder without package.json is a stop", async () => 
     templates,
   });
   assert.deepEqual([root.stops, file(root, CALLER).action], [[], "keep"]);
+  // A leading / is the runner's filesystem root, never the repo's.
+  const absolute = planFiles(repo({ "package.json": PKG, [CALLER]: caller({ node: "/" }) }), {
+    templates,
+  });
+  assert.deepEqual(
+    [file(absolute, CALLER).action, file(absolute, CALLER).detail],
+    ["drift", 'node is "/", the files say "."'],
+  );
 });
 
 test("the caller's node folder wins over a shallower package.json, and edits go to its manifest", () => {

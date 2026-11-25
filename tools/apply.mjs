@@ -558,7 +558,8 @@ export function addCodeqlJob(text, template) {
 // The audit reads caller inputs the same way: one normalizer for both.
 const bare = bareDir;
 const sameDir = (a, b) => bare(a.replace(/^\//, "")) === bare(b.replace(/^\//, ""));
-const manifestIn = (dir) => (dir === "." ? "package.json" : `${dir}/package.json`);
+const manifestIn = (dir) =>
+  dir === "." ? "package.json" : `${dir === "/" ? "" : dir}/package.json`;
 
 // `dotnet: "."` next to a planned `App.slnx` at the root is the same choice.
 function sameInput(key, current, planned) {

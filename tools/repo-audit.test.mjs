@@ -225,9 +225,22 @@ test("an input that points at nothing on the default branch is a finding", () =>
   assert.match(findings[1][1], /src\/Old\.slnx, which is not on the default branch/);
   assert.deepEqual(checkInputs({ node: "web", dotnet: "src/App" }, detected, paths), []);
   // Read as apply reads them: repeated slashes and ./ name the same folder.
-  for (const node of ["./web/", "web//", ".//web", "x/../web"]) {
+  for (const node of ["./web/", "web//", ".//web"]) {
     assert.deepEqual(checkInputs({ node, dotnet: "src//App/" }, detected, paths), [], node);
   }
+  // A leading / is the runner's filesystem root, and .. goes through a folder
+  // the runner may not have: neither names the module.
+  const root = ["package.json", "App.slnx", "tests/Map.Tests.ps1"];
+  const atRoot = detectStacks(root, stacks);
+  const absolute = checkInputs({ node: "/", dotnet: "/", powershell: "//" }, atRoot, root);
+  assert.deepEqual(absolute, [
+    ["inputs", "node points at /, but /package.json is not on the default branch."],
+    ["inputs", "dotnet points at /, which is not on the default branch."],
+    ["inputs", "powershell points at //, which is not on the default branch."],
+  ]);
+  assert.deepEqual(checkInputs({ node: "x/../web", dotnet: "src/App" }, detected, paths), [
+    ["inputs", "node points at x/../web, but x/../web/package.json is not on the default branch."],
+  ]);
 });
 
 test("Pester tests need the powershell input, and the input must point at something", () => {

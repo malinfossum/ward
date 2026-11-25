@@ -15,11 +15,11 @@ run emails me.
 | `ruleset` | The default branch has no pull-request rule, does not block force pushes (non-fast-forward) or deletion, does not require code scanning results, or does not require the `ward / gate` check |
 | `caller` | No `.github/workflows/ward.yml`, or it does not call `malinfossum/ward/.github/workflows/ci.yml@v1`, or its automerge job does not pin `dependabot-automerge.yml` to a full Ward commit SHA, or it has no `codeql` job, or that job does not pin `codeql.yml` to a full Ward commit SHA (Ward itself calls `./.github/workflows/codeql.yml`) |
 | `inputs` | Files of a stack are on `main` but the caller leaves that module off, or an input points at a path that is not there |
-| `read` | GitHub did not answer the branch rules read. It goes through the read token, which every owner has, so this fails the run on every owner, an org without an admin token included; rerun before changing a token |
+| `read` | GitHub did not answer the branch rules read. It goes through the read token, which every owner has, so this fails the run on every owner, an org without an admin token included; rerun before changing a token. The read feeds only `ruleset` findings, so a `ruleset` deferral covers it too |
 | `suppression` | A `<NuGetAuditSuppress>` without a `YYYY-MM-DD` dated comment beside or above it |
 | `runtime` | A `<TargetFramework>` or the caller's `node-version` within 90 days of end of life, or past it |
 | `canary` | Ward's `canary.yml` last completed run is not `success`, is older than 8 days, or is missing (a 404) |
-| `exception` | Warning: a module the repo keeps off on purpose, listed in `stacks.json` under `exceptions` with a dated reason; also a stale exception (no files for that module, or the input is set), and a `caller`, `ruleset` or `baseline` finding deferred on a joint repo or on a repo kept off Ward on purpose |
+| `exception` | Warning: a module the repo keeps off on purpose, listed in `stacks.json` under `exceptions` with a dated reason; also a stale exception (no files for that module, or the input is set), and a `caller`, `ruleset` (with its `read`) or `baseline` finding deferred on a joint repo or on a repo kept off Ward on purpose |
 | `error` | The audit could not read the repo (a GitHub API error); the other repos still report |
 
 Warnings, which never fail the run: `uncovered` (files of a stack no module covers yet, see

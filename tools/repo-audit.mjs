@@ -5,7 +5,6 @@
 // alive. Each check is a pure function over fetched data that returns
 // [kind, message] findings; main() only fetches and reports.
 import { appendFileSync } from "node:fs";
-import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { fetchFile, listRepos, retrying } from "./repo-hygiene.mjs";
@@ -155,8 +154,16 @@ const sample = (files) => files.slice(0, 3).join(", ");
 
 // A caller input as the runner's working-directory reads it: `./web`, `web`,
 // `web/` and `.//web//` are one directory, and `./` alone is the root. apply
-// reads inputs the same way, so the two never disagree on a caller.
-export const bareDir = (value) => posix.normalize(value || ".").replace(/\/+$/, "") || ".";
+// reads inputs the same way, so the two never disagree on a caller. A leading
+// `/` is the runner's filesystem root, never the repo's, so it stays (and
+// names nothing in the tree), and `..` stays too: the runner resolves it
+// through folders the tree may not have.
+export const bareDir = (value) => {
+  const text = value || ".";
+  const parts = text.split("/").filter((part) => part && part !== ".");
+  if (text.startsWith("/")) return `/${parts.join("/")}`;
+  return parts.join("/") || ".";
+};
 
 // A module the repo's files need must be on, and an input that is on must
 // point at something on the default branch. A merged PR that turned a module
@@ -203,7 +210,7 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
   const node = inputs.node ?? "";
   if (node) {
     const dir = bareDir(node);
-    const manifest = dir === "." ? "package.json" : `${dir}/package.json`;
+    const manifest = dir === "." ? "package.json" : `${dir === "/" ? "" : dir}/package.json`;
     if (!have.has(manifest)) {
       findings.push([
         "inputs",
