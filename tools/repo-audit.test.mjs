@@ -352,7 +352,7 @@ test("a ruleset that allows force pushes or skips code scanning is a finding per
   assert.match(findings[1][1], /code scanning/);
 });
 
-test("a field missing from the fetched data is a token warning, not a crash", () => {
+test("a field missing from the fetched data is a token or read finding, not a crash", () => {
   for (const field of [
     "securityUpdates",
     "alerts",
@@ -362,7 +362,7 @@ test("a field missing from the fetched data is a token warning, not a crash", ()
     "rules",
   ]) {
     const findings = checkBaseline({ ...baseline, [field]: undefined });
-    assert.deepEqual(kinds(findings), ["token"], field);
+    assert.deepEqual(kinds(findings), [field === "rules" ? "read" : "token"], field);
   }
 });
 
@@ -390,7 +390,7 @@ test("a setting the token cannot read is a token warning, not a pass and not a f
     rules: null,
   };
   const findings = checkBaseline(unreadable);
-  assert.deepEqual(kinds(findings), ["token", "token"]);
+  assert.deepEqual(kinds(findings), ["read", "token"]);
   assert.match(findings[0][1], /branch rules read/);
   assert.match(findings[1][1], /Administration \(read\)/);
   assert.doesNotMatch(findings[1][1], /branch rules/);
@@ -401,7 +401,7 @@ test("a setting the token cannot read is a token warning, not a pass and not a f
 const RULES_UNREAD =
   "GitHub did not answer the branch rules read. It goes through the read token (GITHUB_TOKEN), not the admin one, so rerun before changing a token.";
 
-test("unread branch rules are their own token finding, never the Administration sentence", () => {
+test("unread branch rules are a read finding, never the Administration sentence", () => {
   const read = {
     securityUpdates: { enabled: true, paused: false },
     alerts: true,
@@ -413,14 +413,19 @@ test("unread branch rules are their own token finding, never the Administration 
     privateReporting: true,
     rules: null,
   };
-  assert.deepEqual(checkBaseline(read), [["token", RULES_UNREAD]]);
+  assert.deepEqual(checkBaseline(read), [["read", RULES_UNREAD]]);
   // Without an admin token the rules are still read, so the missing secret
   // does not explain them.
   const unread = "AUDIT_TOKEN_X is not set, so the settings of x/y were not read.";
-  assert.deepEqual(checkBaseline({ rules: null, unread }), [
-    ["token", RULES_UNREAD],
+  const findings = checkBaseline({ rules: null, unread });
+  assert.deepEqual(findings, [
+    ["read", RULES_UNREAD],
     ["token", unread],
   ]);
+  // An org without its own admin token softens token findings only: the rules
+  // read never used that token, so it fails there as on my own repos.
+  assert.equal(hardCount(findings, warnKindsFor("rookdex", {})), 1);
+  assert.equal(hardCount(findings, warnKindsFor("malinfossum", {})), 2);
 });
 
 const PROPS = `<Project>
@@ -786,6 +791,25 @@ test("fetchRepoData: with admin read, 200 and 204 fill every setting", async () 
     for (const call of stub.calls) {
       assert.equal(call.auth, SETTINGS.test(call.path) ? "Bearer admin" : "Bearer read", call.path);
     }
+  } finally {
+    stub.restore();
+  }
+});
+
+test("fetchRepoData: an empty repo's tree is an error for the audit, no files only with emptyOk", async () => {
+  const stub = stubFetch([
+    [/\/git\/trees\//, 409, { message: "Git Repository is empty." }],
+    [/\/rules\/branches\/main$/, 200, []],
+  ]);
+  try {
+    const plain = { ...META, security_and_analysis: null };
+    await assert.rejects(
+      fetchRepoData(plain, { admin: "", read: "read", stacks }),
+      /^Error: GitHub API 409 on the tree of malinfossum\/x: Git Repository is empty\.$/,
+    );
+    const data = await fetchRepoData(plain, { admin: "", read: "read", stacks, emptyOk: true });
+    assert.deepEqual([data.tree, data.caller, data.files], [[], null, {}]);
+    assert.deepEqual(data.baseline.rules, []);
   } finally {
     stub.restore();
   }

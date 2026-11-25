@@ -270,10 +270,12 @@ export function checkBaseline({
     ]);
   }
   // The rules go through the read token, so the Administration sentence below
-  // never covers them, not even when no admin token is set.
+  // never covers them, not even when no admin token is set. Their kind is read,
+  // not token: every owner has a read token, so an org without an admin one
+  // must not soften this to a warning.
   if (rules == null) {
     findings.push([
-      "token",
+      "read",
       "GitHub did not answer the branch rules read. It goes through the read token (GITHUB_TOKEN), not the admin one, so rerun before changing a token.",
     ]);
   } else {
@@ -597,7 +599,13 @@ function messageOf(text) {
 // setting; a write answers with its status, so the caller checks for a 2xx
 // before it says done. A read retries a transient 5xx (see retrying); a write
 // does not, since a repeated write could apply twice.
-export async function request(path, token, { method = "GET", body, retryDelayMs = 1000 } = {}) {
+// answers names more statuses that come back like a 404, for a caller that
+// reads one as an answer (an empty repo's tree is a 409).
+export async function request(
+  path,
+  token,
+  { method = "GET", body, retryDelayMs = 1000, answers = [] } = {},
+) {
   const send = () =>
     fetch(`${API}${path}`, {
       method,
@@ -611,7 +619,7 @@ export async function request(path, token, { method = "GET", body, retryDelayMs 
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   const res = method === "GET" ? await retrying(send, retryDelayMs) : await send();
-  const silent = res.status === 204 || [401, 403, 404].includes(res.status);
+  const silent = res.status === 204 || [401, 403, 404, ...answers].includes(res.status);
   if (res.status >= 400 && !silent) {
     // The API says why (a validation message on a 422); the first line of it
     // is the difference between a rerun and a search.
@@ -675,18 +683,29 @@ export async function readPrivateReporting(repo, admin) {
   }
 }
 
-export async function fetchRepoData(meta, { admin, read, stacks = loadStacks() }) {
+const EMPTY_REPO = /repository is empty/i;
+
+// emptyOk: apply's commands read a repo with no commits yet, whose tree
+// answers 409 "Git Repository is empty.", as a repo with no files, since a
+// setting or a ruleset needs none. The audit does not pass it: a tree on a
+// public repo answers without a token, so there anything but 200 is a real
+// failure (a rate limit, or a repo with no commits yet), never "no files".
+export async function fetchRepoData(meta, { admin, read, stacks = loadStacks(), emptyOk = false }) {
   const repo = meta.full_name;
   const branch = encodeURIComponent(meta.default_branch);
-  const tree = await request(`/repos/${repo}/git/trees/${branch}?recursive=1`, read);
-  // A tree on a public repo answers without a token, so anything but 200 is a
-  // real failure (a rate limit, or a repo with no commits yet), never "no files".
-  if (tree.status !== 200) throw new Error(`GitHub API ${tree.status} on the tree of ${repo}`);
-  if (tree.body.truncated) {
+  const tree = await request(`/repos/${repo}/git/trees/${branch}?recursive=1`, read, {
+    answers: [409],
+  });
+  const empty = emptyOk && tree.status === 409 && EMPTY_REPO.test(tree.message ?? "");
+  if (!empty && tree.status !== 200) {
+    const why = tree.message ? `: ${tree.message}` : "";
+    throw new Error(`GitHub API ${tree.status} on the tree of ${repo}${why}`);
+  }
+  if (tree.body?.truncated) {
     console.log(`::warning::${repo}: the tree is truncated, stack detection may miss files`);
   }
-  const paths = tree.body.tree.filter((e) => e.type === "blob").map((e) => e.path);
-  const caller = await fetchFile(repo, ".github/workflows/ward.yml", read);
+  const paths = empty ? [] : tree.body.tree.filter((e) => e.type === "blob").map((e) => e.path);
+  const caller = empty ? null : await fetchFile(repo, ".github/workflows/ward.yml", read);
   const files = {};
   for (const path of paths.filter((p) => PROPS_OR_PROJECT.test(p) && !ignored(p, stacks.ignore))) {
     const text = await fetchFile(repo, path, read);
