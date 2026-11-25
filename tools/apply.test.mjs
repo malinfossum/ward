@@ -688,6 +688,10 @@ test("an Astro repo gets astro check; a repo without Biome gets lint and a note"
   assert.match(edit.content, /"typecheck": "astro check"/);
   assert.match(edit.content, /"lint": "biome ci \."/);
   assert.match(plan.notes[0], /^lint runs Biome: add @biomejs\/biome/);
+  assert.equal(
+    plan.notes[1],
+    "typecheck runs astro check, the only checker that reads .astro files: add @astrojs/check and typescript as devDependencies first.",
+  );
 });
 
 // create-vue's layout: a root tsconfig.json that only holds references.
@@ -799,10 +803,26 @@ test("a Svelte repo gets svelte-check, reuses its check script, and is asked on 
   const vite = { ...svelte, scripts: { ...scripts, check } };
   const reused = planFor(vite, REFS).files.find((f) => f.action === "edit");
   assert.equal(JSON.parse(reused.content).scripts.typecheck, "npm run check --");
-  // check is reused only where Svelte names it so.
+  // check is reused only when it runs svelte-check: the name alone may lint or run it all.
   const plain = { name: "x", scripts: { ...scripts, check: "x" }, devDependencies: {} };
   const own = planFor(plain, "{}").files.find((f) => f.action === "edit");
   assert.equal(JSON.parse(own.content).scripts.typecheck, "tsc --noEmit");
+  const linting = { ...svelte, scripts: { ...scripts, check: "biome check --write ." } };
+  const notReused = planFor(linting, "{}").files.find((f) => f.action === "edit");
+  assert.equal(
+    JSON.parse(notReused.content).scripts.typecheck,
+    "svelte-check --tsconfig ./tsconfig.json",
+  );
+  // SvelteKit's tsconfig extends one svelte-kit sync writes, prepare script or not.
+  const kit = {
+    ...svelte,
+    devDependencies: { ...svelte.devDependencies, "@sveltejs/kit": "2.0.0" },
+  };
+  const synced = planFor(kit, '{ "extends": "./.svelte-kit/tsconfig.json" }');
+  assert.equal(
+    JSON.parse(synced.files.find((f) => f.action === "edit").content).scripts.typecheck,
+    "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+  );
   // svelte-check reads one tsconfig, and a solution root names no files.
   const asked = planFor(svelte, REFS);
   assert.ok(!asked.files.some((f) => f.action === "edit"));
@@ -832,9 +852,27 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
     file(planFor({ ...ts, svelte: "5.43.0" }, REFS), "package.json").detail,
     'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .svelte files: point svelte-check at the tsconfig that holds the app',
   );
+  // The fix names the package it needs, as an added script would.
+  const svelte = planFor({ ...ts, svelte: "5.43.0" }, "{}");
+  assert.match(file(svelte, "package.json").detail, /change it to "svelte-check --tsconfig/);
+  assert.deepEqual(svelte.notes, [
+    "typecheck runs svelte-check, the only checker that reads .svelte files: add svelte-check as a devDependency first.",
+  ]);
+  // A type-check that runs the same tsc, or calls typecheck back, is not the fix.
+  for (const weak of ["tsc --noEmit", "npm run typecheck"]) {
+    assert.match(
+      file(planFor(vue, REFS, { "type-check": weak }), "package.json").detail,
+      /change it to "vue-tsc --build --force"$/,
+    );
+  }
   // Any other script is the repo's own and trusted as is.
   const own = planFor(vue, REFS, { typecheck: "tsc --noEmit -p tsconfig.app.json" });
   assert.equal(file(own, "package.json").action, "keep");
+  // Without a tsconfig.json that tsc fails outright, so it is no drift.
+  const scripts = { lint: "biome ci .", test: "vitest run", typecheck: "tsc --noEmit" };
+  const bare = { name: "x", scripts, devDependencies: { svelte: "5.43.0" } };
+  const untyped = planFiles(repo({ "package.json": JSON.stringify(bare) }), { templates });
+  assert.equal(file(untyped, "package.json").action, "keep");
 });
 
 test("a node input naming a folder without package.json is a stop", async () => {
@@ -846,10 +884,21 @@ test("a node input naming a folder without package.json is a stop", async () => 
   const plan = planFiles(dir, { templates });
   assert.equal(plan.inputs.node, "c");
   assert.deepEqual(plan.stops, [
-    { module: "node", text: "c/package.json is missing: the caller's node input names c." },
+    { module: "node", text: `c/package.json is missing: the caller's node input names "c".` },
   ]);
   const run = await runApply(["files", "--dir", dir, "--apply"], {}, { templates });
   assert.equal(run.exitCode, 1);
+  // ./a and a/ name the same folder as a.
+  for (const node of ["./a", "a/"]) {
+    const spelled = repo({
+      "a/package.json": PKG,
+      "b/package.json": PKG,
+      [CALLER]: caller({ node }),
+    });
+    const settled = planFiles(spelled, { templates });
+    assert.deepEqual(settled.stops, []);
+    assert.equal(file(settled, "a/package.json").action, "keep");
+  }
 });
 
 test("a module in the exceptions stays off in the caller and is noted with its reason", () => {

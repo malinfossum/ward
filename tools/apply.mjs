@@ -295,11 +295,13 @@ export function listTree(dir, stacks) {
 
 // The type check a repo's own setup calls for, null when that is mine to pick.
 // A type-check script (create-vue names it so) is reused rather than copied,
-// and so is check in a Svelte repo (both Svelte templates name it so).
+// and so is a check script that runs svelte-check (both Svelte templates have
+// one). check alone is too common a name to trust: it may lint or run it all.
 function typecheckFor(deps, scripts, tsconfig) {
   if (!("astro" in deps)) {
     if (Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
-    if ("svelte" in deps && Object.hasOwn(scripts, "check")) return "npm run check --";
+    const check = scripts.check;
+    if (typeof check === "string" && /\bsvelte-check\b/.test(check)) return "npm run check --";
   }
   return checkerFor(deps, tsconfig);
 }
@@ -316,13 +318,39 @@ function typecheckFor(deps, scripts, tsconfig) {
 // sources, and one committed by mistake would skip the check. svelte-check
 // has no --build and reads one tsconfig, so on a solution-style root which
 // one holds the app is mine to name. With --tsconfig it reports .ts errors
-// too; SvelteKit's prepare script writes the tsconfig it extends on npm ci.
+// too. A SvelteKit tsconfig extends one svelte-kit sync writes, and a repo
+// may have no prepare script to run it on npm ci, so the check runs it first.
 function checkerFor(deps, tsconfig) {
   if ("astro" in deps) return "astro check";
   const solution = isSolution(tsconfig);
-  if ("svelte" in deps) return solution ? null : "svelte-check --tsconfig ./tsconfig.json";
+  if ("svelte" in deps) {
+    if (solution) return null;
+    const check = "svelte-check --tsconfig ./tsconfig.json";
+    return "@sveltejs/kit" in deps ? `svelte-kit sync && ${check}` : check;
+  }
   const tool = "vue-tsc" in deps || "vue" in deps ? "vue-tsc" : "tsc";
   return solution ? `${tool} --build --force` : `${tool} --noEmit`;
+}
+
+// The checkers apply writes, what each needs installed, and the component
+// files it is the only one to read. The first match wins.
+const CHECKERS = [
+  { runs: /^astro check\b/, name: "astro check", pkg: "@astrojs/check", ext: "astro" },
+  { runs: /\bsvelte-check\b/, name: "svelte-check", pkg: "svelte-check", ext: "svelte" },
+  { runs: /^vue-tsc\b/, name: "vue-tsc", pkg: "vue-tsc", ext: "vue" },
+  { runs: /^tsc\b/, name: "tsc" },
+];
+
+// A note naming what a typecheck command needs and the module lacks; null
+// when it is all there, or when the command runs a script of the repo's own.
+function installNote(command, deps) {
+  const checker = CHECKERS.find((c) => c.runs.test(command));
+  if (!checker) return null;
+  const needed = [checker.pkg, "typescript"].filter((name) => name && !(name in deps));
+  if (!needed.length) return null;
+  const as = needed.length === 1 ? "a devDependency" : "devDependencies";
+  const why = checker.ext ? `, the only checker that reads .${checker.ext} files` : "";
+  return `typecheck runs ${checker.name}${why}: add ${needed.join(" and ")} as ${as} first.`;
 }
 
 // The component files a plain tsc never reads, by the framework that owns them.
@@ -336,19 +364,25 @@ function componentExtension(deps) {
 // Up to v1.10.0 apply wrote "tsc --noEmit" for every typecheck but Astro's.
 // That exact script, where it checks no files or skips the repo's
 // components, is drift; any other script is the repo's own and trusted as is.
+// A module without a tsconfig.json fails that tsc outright, so that is no
+// drift. The fix reuses a script only when it does not run the same tsc or
+// call typecheck back. pick is the command named, null when it is mine.
 function staleTypecheck(deps, scripts, tsconfig) {
-  if (scripts.typecheck !== "tsc --noEmit") return null;
+  if (scripts.typecheck !== "tsc --noEmit" || !tsconfig) return null;
   const ext = componentExtension(deps);
   const misses = [
     isSolution(tsconfig) && "checks no files under a solution-style tsconfig.json",
     ext && `skips .${ext} files`,
   ].filter(Boolean);
   if (!misses.length) return null;
-  const pick = typecheckFor(deps, scripts, tsconfig);
+  const reused = typecheckFor(deps, scripts, tsconfig);
+  const own = scripts[reused?.match(/^npm run (\S+) --$/)?.[1]];
+  const weak = own === "tsc --noEmit" || /\btypecheck\b/.test(String(own));
+  const pick = own !== undefined && weak ? checkerFor(deps, tsconfig) : reused;
   const fix = pick
     ? `change it to "${pick}"`
     : "point svelte-check at the tsconfig that holds the app";
-  return `typecheck is "tsc --noEmit", which ${misses.join(" and ")}: ${fix}`;
+  return { detail: `typecheck is "tsc --noEmit", which ${misses.join(" and ")}: ${fix}`, pick };
 }
 
 // tsconfig.json is JSONC: a commented-out "references" line, or an empty
@@ -402,28 +436,17 @@ export function missingScripts(pkg, files, tsconfig = "") {
     if (command) add[name] = command;
     else ask.push(name);
   }
-  if (ask.includes("typecheck")) {
+  if (ask.includes("typecheck") && "svelte" in deps && isSolution(tsconfig)) {
     notes.push(
-      "typecheck: svelte-check reads one tsconfig, and this tsconfig.json only holds references. Name the one that holds the app (the Vite template's check script uses tsconfig.app.json).",
+      "typecheck: svelte-check reads one tsconfig, and the module's tsconfig.json only holds references. Name the one that holds the app (the Vite template's check script uses tsconfig.app.json).",
     );
   }
   if (add.lint && !("@biomejs/biome" in deps)) {
     notes.push("lint runs Biome: add @biomejs/biome as a devDependency and a biome.json first.");
   }
-  if (add.typecheck?.startsWith("tsc ") && !("typescript" in deps)) {
-    notes.push("typecheck runs tsc: add typescript as a devDependency first.");
-  }
-  const checker = ["vue-tsc", "svelte-check"].find((tool) => add.typecheck?.startsWith(`${tool} `));
-  if (checker) {
-    const needed = [checker, "typescript"].filter((name) => !(name in deps));
-    if (needed.length) {
-      const as = needed.length === 1 ? "a devDependency" : "devDependencies";
-      const ext = checker === "vue-tsc" ? "vue" : "svelte";
-      notes.push(
-        `typecheck runs ${checker}, the only checker that reads .${ext} files: add ${needed.join(" and ")} as ${as} first.`,
-      );
-    }
-  }
+  const stale = staleTypecheck(deps, scripts, tsconfig);
+  const install = installNote(add.typecheck ?? stale?.pick ?? "", deps);
+  if (install) notes.push(install);
   if (add.typecheck?.includes(" --build")) {
     notes.push(
       "typecheck runs --build, which emits for any tsconfig it builds without noEmit: each referenced tsconfig must set noEmit. --build still writes a .tsbuildinfo beside each one, so point tsBuildInfoFile under node_modules/.tmp (create-vue does).",
@@ -432,7 +455,7 @@ export function missingScripts(pkg, files, tsconfig = "") {
   if (add["deploy:check"] && !("wrangler" in deps)) {
     notes.push("deploy:check runs wrangler: add wrangler as a devDependency first.");
   }
-  return { add, ask, notes, stale: staleTypecheck(deps, scripts, tsconfig) };
+  return { add, ask, notes, stale: stale?.detail ?? null };
 }
 
 // package.json with the scripts added, in the file's own indentation and
@@ -675,14 +698,16 @@ export function planFiles(
     }
   }
   if (inputs.node) {
-    const manifest = inputs.node === "." ? "package.json" : `${inputs.node}/package.json`;
+    // A caller may write the folder as ./web or web/, the same working-directory to ci.yml.
+    const node = bare(inputs.node);
+    const manifest = node === "." ? "package.json" : `${node}/package.json`;
     const text = read(manifest);
     let pkg = null;
     if (text == null) {
       // Only the caller's node input can name a folder: detection starts from a package.json.
       stops.push({
         module: "node",
-        text: `${manifest} is missing: the caller's node input names ${inputs.node}.`,
+        text: `${manifest} is missing: the caller's node input names "${inputs.node}".`,
       });
     } else {
       try {
@@ -693,9 +718,9 @@ export function planFiles(
     }
     if (pkg) {
       const siblings = paths
-        .filter((p) => dirOf(p) === inputs.node)
+        .filter((p) => dirOf(p) === node)
         .map((p) => p.slice(p.lastIndexOf("/") + 1));
-      const tsconfigPath = inputs.node === "." ? "tsconfig.json" : `${inputs.node}/tsconfig.json`;
+      const tsconfigPath = node === "." ? "tsconfig.json" : `${node}/tsconfig.json`;
       const tsconfig = siblings.includes("tsconfig.json") ? read(tsconfigPath) : "";
       const { add, ask, notes: scriptNotes, stale } = missingScripts(pkg, siblings, tsconfig);
       notes.push(...scriptNotes);
