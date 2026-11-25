@@ -29,7 +29,7 @@ jobs:
 | Module | Runs | Input |
 |---|---|---|
 | identity | Every commit is mine or Dependabot's and carries no AI attribution | always on |
-| node | `lint`, `typecheck`, `test`, `build`, `deploy:check`, `test:e2e`, `test:a11y` from `package.json`; a lint script, or one `npm run lint` reaches, that fixes instead of reporting (`--fix`, `--write`, `--apply`, Prettier's `-w`) fails it | `node`, `a11y` |
+| node | `lint`, `typecheck`, `test`, `build`, `deploy:check`, `test:e2e`, `test:a11y` from `package.json`; a lint that changes a tracked file fails it | `node`, `a11y` |
 | dotnet | Restore (a repo's tool manifest first), build with warnings as errors, `dotnet format`, test (a test project is required), EF Core pending-model check with paths from the repo root | `dotnet` (folder or solution file), `dotnet-ef-project` |
 | powershell | Pester 5 under PowerShell 7 on `windows-latest`; any failed test, block or test file fails it, and so does a path with no `*.Tests.ps1` | `powershell` (tests folder or one test file) |
 

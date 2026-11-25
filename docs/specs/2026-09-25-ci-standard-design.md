@@ -300,7 +300,7 @@ where I can read and run them locally:
 | Step | Command | Required |
 |---|---|---|
 | Install | `npm ci` | always |
-| Lint + format | `npm run lint` (Biome `biome ci`) | always |
+| Lint + format | `npm run lint` (Biome `biome ci`); fails when it changes a tracked file, since a lint that fixes lets CI pass with fixable errors still committed (a fix that writes nothing, such as `--fix-dry-run`, is not seen; skipped with a notice outside a git work tree) | always |
 | Types | `npm run typecheck` | when `tsconfig.json` or `astro.config.*` exists |
 | Unit | `npm test` | always |
 | Build | `npm run build` | when present |

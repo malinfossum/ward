@@ -1,69 +1,63 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { fixingLint, planSteps } from "./node-contract.mjs";
+import { git } from "./git.mjs";
+import { planSteps, rewritten, trackedChanges } from "./node-contract.mjs";
 
-test("the lint family is flagged by name when it fixes, whatever runs it", () => {
-  const scripts = {
-    lint: 'concurrently "npm:lint:*"',
-    "lint:oxlint": "oxlint . --fix",
-    "lint:eslint": "eslint . --fix-dry-run --cache",
-    "lint:biome": "biome check --write .",
-    "lint:old": "biome check --apply",
-    "prelint:css": "stylelint --fix",
-    fix: "eslint . --fix",
-    "format:lint": "prettier --write .",
-  };
-  assert.deepEqual(fixingLint(scripts), [
-    "lint:oxlint",
-    "lint:eslint",
-    "lint:biome",
-    "lint:old",
-    "prelint:css",
+// The ceiling keeps git from finding a repo above the temp folder. Each test
+// file runs in a process of its own, so this reaches no other file.
+process.env.GIT_CEILING_DIRECTORIES = tmpdir();
+
+// A temp repo with the given files committed.
+function repo(files) {
+  const dir = mkdtempSync(join(tmpdir(), "ward-contract-"));
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  const setup = (...args) => assert.equal(git(dir, args).status, 0, args.join(" "));
+  setup("init", "--quiet");
+  setup("add", ".");
+  setup("-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "T");
+  return dir;
+}
+
+test("trackedChanges lists changed and deleted tracked files from the top, never untracked ones", (t) => {
+  const dir = repo({ "a.js": "a\n", "web/b.js": "b\n", "web/c.js": "c\n" });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  assert.deepEqual([...trackedChanges(join(dir, "web")).files.keys()], []);
+  writeFileSync(join(dir, "web/b.js"), "B\n");
+  unlinkSync(join(dir, "web/c.js"));
+  writeFileSync(join(dir, "web/.eslintcache"), "{}");
+  const { files } = trackedChanges(join(dir, "web"));
+  assert.deepEqual([...files.keys()].sort(), ["web/b.js", "web/c.js"]);
+  assert.match(files.get("web/b.js"), /^[0-9a-f]{64}$/);
+  assert.equal(files.get("web/c.js"), null);
+});
+
+test("trackedChanges outside a work tree gives git's reason instead", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ward-contract-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { files, reason } = trackedChanges(dir);
+  assert.equal(files, undefined);
+  assert.match(reason, /not a git repository/);
+});
+
+test("rewritten counts a file changed before lint only when lint changes it again", () => {
+  const before = new Map([
+    ["kept.js", "1"],
+    ["again.js", "1"],
+    ["restored.js", "1"],
   ]);
-});
-
-test("a :fix variant counts only when lint runs it", () => {
-  const helper = { lint: "eslint .", "lint:fix": "eslint . --fix", "lint:js:fix": "eslint --fix" };
-  assert.deepEqual(fixingLint(helper), []);
-  const globbed = { lint: 'run-s "lint:*"', "lint:fix": "eslint . --fix" };
-  assert.deepEqual(fixingLint(globbed), ["lint:fix"]);
-});
-
-test("npm's pre and post hooks and run chains reach scripts outside the family", () => {
-  const scripts = {
-    lint: "pnpm --silent run format && eslint .",
-    format: "prettier -w .",
-    postformat: "biome format --write .",
-    postpostformat: "eslint --fix",
-    style: "stylelint --fix",
-    "lint:all": 'concurrently "npm run style" \'sh -c "npm run types"\'',
-    types: "tsc --noEmit",
-  };
-  // postpostformat is a hook's hook, which npm never runs.
-  assert.deepEqual(fixingLint(scripts), ["format", "postformat", "style"]);
-});
-
-test("run-p with arguments and --; * stays in one segment, ** crosses them", () => {
-  const scripts = {
-    lint: 'run-p "check:* {@}" "deep:** {@}" --',
-    "check:css:deep": "stylelint --fix",
-    "deep:css:deep": "stylelint --fix",
-    "check:js": "eslint .",
-  };
-  assert.deepEqual(fixingLint(scripts), ["deep:css:deep"]);
-});
-
-test("a check-only lint passes, and look-alike flags are no fix", () => {
-  const scripts = {
-    lint: 'run-s "lint:*"',
-    "lint:eslint": "eslint . --cache --fix=false",
-    "lint:fixtures": "node check.mjs --fixtures",
-    "lint:fixed": "tool --fixed-width",
-    "lint:watch": "tsc -w",
-    "lint:prettier": "prettier --check . && npm run lint -w packages/app",
-    "lint:bad": null,
-  };
-  assert.deepEqual(fixingLint(scripts), []);
+  const after = new Map([
+    ["kept.js", "1"],
+    ["again.js", "2"],
+    ["new.js", "1"],
+    ["gone.js", null],
+  ]);
+  assert.deepEqual(rewritten(before, after), ["again.js", "gone.js", "new.js", "restored.js"]);
 });
 
 const base = {

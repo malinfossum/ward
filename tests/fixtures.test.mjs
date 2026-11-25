@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { git, scrubbed } from "../tools/git.mjs";
 
@@ -48,6 +48,49 @@ function identity(email, message) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// A fixture copied out of Ward and run through the node contract, in a git
+// repo of its own with the fixture committed, or (repo: false) in no repo.
+// Run in place, a fixture that rewrites files would dirty Ward's own tree.
+// The ceiling keeps git from finding a repo above the temp folder.
+function copied(fixture, { repo = true } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "ward-node-"));
+  try {
+    cpSync(join("fixtures", fixture), dir, { recursive: true });
+    const env = { GIT_CEILING_DIRECTORIES: dirname(dir) };
+    if (repo) {
+      const setup = (...args) => {
+        const result = git(dir, args, { env: fixtureEnv(env) });
+        assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
+      };
+      setup("init", "--quiet");
+      setup("add", ".");
+      const author = ["-c", "user.name=Fixture", "-c", `user.email=${ME}`];
+      setup(...author, "commit", "--quiet", "-m", "Fixture");
+    }
+    const result = run("node-contract.mjs", [dir], { env });
+    return { ...result, ran: existsSync(join(dir, ".lintcache")) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("node-lint-fix passes outside a git repo, with a notice that the lint check was skipped", () => {
+  const { status, out, ran } = copied("node-lint-fix", { repo: false });
+  assert.equal(status, 0, out);
+  assert.ok(ran, "the lint ran in the copy");
+  assert.match(
+    out,
+    /::notice::git cannot read a work tree here \(fatal: not a git repository/,
+    out,
+  );
+  assert.equal(
+    readFileSync("fixtures/node-lint-fix/src.js", "utf8"),
+    'export const greeting = "hi";\n',
+    "Ward's own copy stays untouched",
+  );
+  assert.ok(!existsSync("fixtures/node-lint-fix/.lintcache"));
+});
 
 test("identity passes my own commit", () => {
   const { status, out } = identity(ME, "Fix");
@@ -116,9 +159,9 @@ const REJECTS = {
       expect: /no "test:a11y" script/,
     },
     {
-      name: "node-lint-fix: a lint that passes only because it fixes instead of reporting",
-      run: () => run("node-contract.mjs", ["fixtures/node-lint-fix"]),
-      expect: /::error::the "lint" script fixes problems instead of reporting them/,
+      name: "node-lint-fix: a lint that passes only because it rewrites a tracked file",
+      run: () => copied("node-lint-fix"),
+      expect: /::error::npm run lint changed src\.js: it fixes problems instead of reporting them/,
     },
   ],
   dotnet: [

@@ -738,18 +738,6 @@ test("vue-tsc is picked for Vue, and references get --build", () => {
   assert.equal(typecheck(plain, invented), "tsc --noEmit");
 });
 
-test("a fixing prelint is an ask even when apply adds the lint it hooks", () => {
-  const manifest = { name: "x", scripts: { prelint: "eslint . --fix", test: "vitest run" } };
-  const dir = repo({ "package.json": JSON.stringify(manifest) });
-  const plan = planFiles(dir, { templates });
-  assert.deepEqual(
-    plan.files.filter((f) => f.path === "package.json").map((f) => f.action),
-    ["edit", "ask"],
-  );
-  assert.match(file(plan, "package.json").detail, /scripts: lint/);
-  assert.ok(plan.files.some((f) => f.action === "ask" && /"prelint"/.test(f.detail)));
-});
-
 test("a module in a subfolder reads its own tsconfig.json, and --build comes with a note", () => {
   const manifest = {
     name: "x",
@@ -764,24 +752,6 @@ test("a module in a subfolder reads its own tsconfig.json, and --build comes wit
   assert.ok(
     plan.notes.some((n) => /^typecheck runs --build/.test(n)),
     plan.notes.join("\n"),
-  );
-});
-
-test("a lint that fixes instead of reporting is an ask, not a keep", () => {
-  const manifest = {
-    name: "x",
-    scripts: { lint: 'run-s "lint:*"', "lint:eslint": "eslint . --fix", test: "vitest run" },
-  };
-  const dir = repo({ "package.json": JSON.stringify(manifest) });
-  const plan = planFiles(dir, { templates });
-  assert.deepEqual(
-    plan.files.filter((f) => f.path === "package.json").map((f) => [f.action, f.detail]),
-    [
-      [
-        "ask",
-        'make "lint:eslint" check-only; the gate fails a lint that fixes instead of reporting',
-      ],
-    ],
   );
 });
 

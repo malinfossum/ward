@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
 import { git } from "./git.mjs";
-import { fixingLint, planSteps } from "./node-contract.mjs";
+import { planSteps } from "./node-contract.mjs";
 import {
   CODEQL_PINNED,
   exceptionsFor,
@@ -361,7 +361,7 @@ export function missingScripts(pkg, files, tsconfig = "") {
   }
   if (add.typecheck?.endsWith(" --build")) {
     notes.push(
-      'typecheck runs --build, which emits for any tsconfig it builds without noEmit: check the root and each referenced one set noEmit, or the root has "files": [] (Vite and create-vue do).',
+      'typecheck runs --build, which emits for any tsconfig it builds without noEmit: each referenced tsconfig must set noEmit, and the root too unless it has "files": []. --build still writes a .tsbuildinfo beside each one, so point tsBuildInfoFile under node_modules/.tmp (create-vue does).',
     );
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
@@ -635,13 +635,7 @@ export function planFiles(
         const detail = `add a "${name}" script; the runner is yours to choose`;
         files.push({ path: manifest, action: "ask", detail });
       }
-      // The gate fails these, so say so before the first CI run does.
-      const fixing = fixingLint({ ...pkg.scripts, ...add });
-      for (const name of fixing) {
-        const detail = `make "${name}" check-only; the gate fails a lint that fixes instead of reporting`;
-        files.push({ path: manifest, action: "ask", detail });
-      }
-      if (!names.length && !ask.length && !fixing.length) {
+      if (!names.length && !ask.length) {
         files.push({ path: manifest, action: "keep" });
       }
     }

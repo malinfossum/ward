@@ -1,9 +1,11 @@
 // Runs the npm script contract for the node module. Which scripts are required
 // depends on what the repo contains.
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { git } from "./git.mjs";
 
 const MODES = new Set(["off", "warn", "strict"]);
 
@@ -48,107 +50,71 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
   return { steps, missing };
 }
 
-// Flags that make a linter fix what it finds instead of reporting it: CI then
-// passes with fixable errors still in the committed code. --fix also covers
-// --fix-type, --fix-dangerously and --fix-dry-run (that one writes nothing, but
-// leaves fixable errors out of the exit code); --fix=false is off. --write and
-// --apply are Biome's and Prettier's, and -w is Prettier's short --write, so it
-// counts only inside a prettier command (npm's -w is a workspace).
-const LONG_FIX = /(?:^|\s)--(?:fix|write|apply)(?!\w|=false)/;
-const PRETTIER_W = /\bprettier\b.*\s-w(?!\S)/;
-const segments = (cmd) => cmd.split(/&&|\|\||[;|]/);
-const fixes = (cmd) =>
-  typeof cmd === "string" && segments(cmd).some((s) => LONG_FIX.test(s) || PRETTIER_W.test(s));
-
-// lint, lint:* and their pre and post hooks: a lint runner usually reaches
-// them in ways no parser here follows (concurrently, sh -c, pnpm). A :fix
-// script is the fixing variant on purpose and counts only when lint runs it.
-const LINT_FAMILY = /^(?:pre|post)?lint(?::|$)/;
-const FIX_VARIANT = /(?:^|:)fix(?::|$)/;
-const RUNNERS = new Set(["npm", "pnpm", "yarn", "bun"]);
-
-// A run-s / run-p / npm-run-all pattern as a regex: * matches within one
-// `:` segment, ** across segments.
-function globToRegex(glob) {
-  const body = glob
-    .split("**")
-    .map((part) =>
-      part
-        .split("*")
-        .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-        .join("[^:]*"),
-    )
-    .join(".*");
-  return new RegExp(`^${body}$`);
+// The tracked files that differ from the index, each with a hash of what is on
+// disk now (null for one that is gone), keyed by its path from the top of the
+// work tree: { files }. When git cannot read a work tree at dir (none there, no
+// git, a container's dubious ownership), { reason } says why.
+export function trackedChanges(dir) {
+  const top = git(dir, ["rev-parse", "--show-toplevel"]);
+  if (top.status !== 0) return { reason: why(top) };
+  const root = top.stdout.trim();
+  const diff = git(dir, ["diff", "--name-only", "-z"]);
+  if (diff.status !== 0) return { reason: why(diff) };
+  const names = diff.stdout.split("\0").filter(Boolean);
+  return { files: new Map(names.map((name) => [name, hashOf(join(root, name))])) };
 }
 
-// The scripts a command runs: `<npm|pnpm|yarn|bun> [flags] run x`, the
-// arguments of run-s, run-p and npm-run-all up to their `--`, concurrently's
-// npm:<script>, and a quoted command (concurrently "npm run a", sh -c '...').
-function calledScripts(cmd, names) {
-  const called = [];
-  const matching = (glob) => {
-    const pattern = globToRegex(glob);
-    return names.filter((name) => pattern.test(name));
+const why = (result) =>
+  result.error?.message || result.stderr.trim().split("\n")[0] || `git exited ${result.status}`;
+
+// A submodule shows up as a folder; its commit and its own diff say what changed in it.
+function hashOf(path) {
+  try {
+    if (statSync(path).isDirectory()) {
+      const state = git(path, ["rev-parse", "HEAD"]).stdout + git(path, ["diff", "HEAD"]).stdout;
+      return `dir:${createHash("sha256").update(state).digest("hex")}`;
+    }
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+// The paths whose state differs between two trackedChanges snapshots, so a
+// file that was already changed before lint counts only if lint changed it again.
+export function rewritten(before, after) {
+  const paths = new Set([...before.keys(), ...after.keys()]);
+  return [...paths].filter((path) => before.get(path) !== after.get(path)).sort();
+}
+
+const SHOWN = 10;
+
+// A lint that fixes what it finds instead of reporting it lets CI pass with
+// fixable errors still in the committed code. Whatever runner or flag does
+// it, the fix shows up as a changed tracked file; caches and other untracked
+// files are fine. A fix that writes nothing (--fix-dry-run) is not seen.
+function lintCheck(before, after) {
+  const reason = before.reason ?? after.reason;
+  if (reason) {
+    return {
+      notice: `git cannot read a work tree here (${reason}), so the gate cannot see whether npm run lint changed files`,
+    };
+  }
+  const changed = rewritten(before.files, after.files);
+  if (!changed.length) return {};
+  const more = changed.length > SHOWN ? ` and ${changed.length - SHOWN} more` : "";
+  const list = changed.slice(0, SHOWN).join(", ") + more;
+  return {
+    error: `npm run lint changed ${list}: it fixes problems instead of reporting them, so CI passes with fixable errors still in the code. Make lint check-only and move the fixing command to a script lint does not run, such as "fix"`,
   };
-  for (const part of segments(cmd)) {
-    const raw = part.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
-    const words = raw.map((w) => w.replace(/^["']|["']$/g, ""));
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i];
-      if (/^["']/.test(raw[i]) && /\s/.test(word)) called.push(...calledScripts(word, names));
-      if (word.startsWith("npm:")) called.push(...matching(word.slice(4)));
-      if (RUNNERS.has(word)) {
-        const rest = words.slice(i + 1).filter((w) => !w.startsWith("-"));
-        if ((rest[0] === "run" || rest[0] === "run-script") && rest[1]) {
-          called.push(...matching(rest[1]));
-        }
-      }
-      if (["run-s", "run-p", "npm-run-all"].includes(word)) {
-        for (const arg of words.slice(i + 1)) {
-          if (arg === "--") break;
-          if (arg.startsWith("-")) continue;
-          // "build-only {@}": the first word is the script, the rest its arguments.
-          called.push(...matching(arg.split(/\s+/)[0]));
-        }
-      }
-    }
-  }
-  return called;
-}
-
-// The scripts that fix instead of report and that `npm run lint` runs or
-// likely runs: the lint family by name, plus every script lint reaches
-// (npm's pre and post hooks around each, and the scripts it calls), so a
-// lint:fix that lint does run is caught. In package.json order.
-export function fixingLint(scripts) {
-  const names = Object.keys(scripts);
-  const family = names.filter((n) => LINT_FAMILY.test(n) && !FIX_VARIANT.test(n));
-  const flagged = new Set(family);
-  const reached = new Set();
-  // Start from lint and the rest of the family, since lint likely runs them too.
-  const queue = ["lint", ...family].map((name) => ({ name, hook: false }));
-  while (queue.length) {
-    const { name, hook } = queue.shift();
-    if (!Object.hasOwn(scripts, name) || reached.has(name)) continue;
-    reached.add(name);
-    flagged.add(name);
-    // npm runs prelint and postlint, but never a hook's own hooks.
-    if (!hook) queue.push({ name: `pre${name}`, hook: true }, { name: `post${name}`, hook: true });
-    if (typeof scripts[name] === "string") {
-      queue.push(...calledScripts(scripts[name], names).map((n) => ({ name: n, hook: false })));
-    }
-  }
-  return names.filter((name) => flagged.has(name) && fixes(scripts[name]));
 }
 
 function main() {
   const dir = process.argv[2] ?? ".";
   const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-  const scripts = pkg.scripts ?? {};
   const { steps, missing } = planSteps({
-    scripts,
+    scripts: pkg.scripts ?? {},
     files: readdirSync(dir),
     a11y: process.env.A11Y ?? "off",
     hasPlaywright: "@playwright/test" in deps,
@@ -159,17 +125,20 @@ function main() {
     console.log(`::error::package.json has no "${script}" script, which this repo needs`);
     failed++;
   }
-  for (const script of fixingLint(scripts)) {
-    console.log(
-      `::error::the "${script}" script fixes problems instead of reporting them, so CI passes with fixable errors still in the code. Make it check-only and move the fixing command to a script lint does not run, such as "fix"`,
-    );
-    failed++;
-  }
   for (const step of steps) {
+    const before = step.name === "lint" ? trackedChanges(dir) : undefined;
     console.log(`::group::${step.name}`);
     // The commands are fixed strings from the contract; npm needs a shell on Windows.
     const { status } = spawnSync(step.cmd, { cwd: dir, stdio: "inherit", shell: true });
     console.log("::endgroup::");
+    if (step.name === "lint") {
+      const { notice, error } = lintCheck(before, trackedChanges(dir));
+      if (notice) console.log(`::notice::${notice}`);
+      if (error) {
+        console.log(`::error::${error}`);
+        failed++;
+      }
+    }
     if (status === 0) continue;
     if (step.soft) {
       console.log(`::warning::${step.name} failed (a11y is in warn mode)`);
