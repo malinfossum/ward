@@ -764,6 +764,13 @@ test("vue-tsc is picked for Vue, and a solution-style root gets --build", () => 
     references: [{ path: "./tsconfig.node.json" }],
   });
   assert.equal(typecheck(plain, ownFiles), "tsc --noEmit");
+  // An include list names files beside "files": [], so that root checks them.
+  const included = JSON.stringify({
+    files: [],
+    include: ["src"],
+    references: [{ path: "./tsconfig.node.json" }],
+  });
+  assert.equal(typecheck(plain, included), "tsc --noEmit");
 });
 
 test("a module in a subfolder reads its own tsconfig.json, and --build comes with a note", () => {
@@ -846,12 +853,13 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
     'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json: change it to "tsc --build --force"',
   );
   assert.equal(solution.notes.length, 1);
-  assert.match(solution.notes[0], /^typecheck runs --build/);
+  // The fix is not in the repo yet, so its notes say so.
+  assert.match(solution.notes[0], /^the typecheck fix runs --build/);
   // The repo's own type-check is offered, never picked: whether it checks files is mine to judge.
   const vue = { ...ts, vue: "3.5.0", "vue-tsc": "3.3.11" };
   assert.equal(
     file(planFor(vue, REFS, { "type-check": "vue-tsc --build" }), "package.json").detail,
-    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "vue-tsc --build --force", or to "npm run type-check --" if type-check checks them',
+    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "vue-tsc --build --force", or change it to "npm run type-check --" if type-check checks them',
   );
   // The fix names the package it needs, Svelte on a solution root included.
   const svelteRoot = planFor({ ...ts, svelte: "5.43.0" }, REFS);
@@ -860,8 +868,13 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
     'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .svelte files: point svelte-check at the tsconfig that holds the app',
   );
   const installSvelte =
-    "typecheck runs svelte-check, the only checker that reads .svelte files: add svelte-check as a devDependency first.";
+    "the typecheck fix runs svelte-check, the only checker that reads .svelte files: add svelte-check as a devDependency first.";
   assert.deepEqual(svelteRoot.notes, [installSvelte]);
+  const offered = planFor({ ...ts, svelte: "5.43.0" }, REFS, { "type-check": "svelte-check" });
+  assert.match(
+    file(offered, "package.json").detail,
+    /holds the app, or change it to "npm run type-check --" if type-check checks them$/,
+  );
   const svelte = planFor({ ...ts, svelte: "5.43.0" }, "{}");
   assert.match(file(svelte, "package.json").detail, /change it to "svelte-check --tsconfig/);
   assert.deepEqual(svelte.notes, [installSvelte]);
