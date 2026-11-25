@@ -54,7 +54,7 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
 // not, each with a hash of what is on disk now (null for one that is gone),
 // keyed by its path from the top of the work tree: { head, files }. The flags
 // hold the output to that shape whatever diff.relative or a submodule's
-// ignore setting says; a submodule counts when its commit or a tracked file
+// ignore setting says, and a rename lists both paths; a submodule counts when its commit or a tracked file
 // in it changes, never for an untracked cache inside it. When git cannot read
 // a work tree at dir (none there, no git, no commit yet, a container's
 // dubious ownership), { reason } says why.
@@ -64,7 +64,13 @@ export function trackedChanges(dir) {
   const root = top.stdout.trim();
   const head = git(dir, ["rev-parse", "--verify", "HEAD"]);
   if (head.status !== 0) return { reason: why(head) };
-  const flags = ["--name-only", "-z", "--no-relative", "--ignore-submodules=untracked"];
+  const flags = [
+    "--name-only",
+    "-z",
+    "--no-relative",
+    "--no-renames",
+    "--ignore-submodules=untracked",
+  ];
   const diff = git(dir, ["diff", ...flags, "HEAD"]);
   if (diff.status !== 0) return { reason: why(diff) };
   const names = diff.stdout.split("\0").filter(Boolean);

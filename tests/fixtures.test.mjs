@@ -51,13 +51,14 @@ function identity(email, message) {
 
 // A fixture copied out of Ward and run through the node contract, in a git
 // repo of its own with the fixture committed, or (repo: false) in no repo.
-// Run in place, a fixture that rewrites files would dirty Ward's own tree.
+// Run in place, a fixture that rewrites files would dirty Ward's own tree,
+// and the lint check would see any Ward file saved while the lint runs.
 // The ceiling keeps git from finding a repo above the temp folder.
-function copied(fixture, { repo = true } = {}) {
+function copied(fixture, { repo = true, env: extra = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ward-node-"));
   try {
     cpSync(join("fixtures", fixture), dir, { recursive: true });
-    const env = { GIT_CEILING_DIRECTORIES: dirname(dir) };
+    const env = { ...extra, GIT_CEILING_DIRECTORIES: dirname(dir) };
     if (repo) {
       const setup = (...args) => {
         const result = git(dir, args, { env: fixtureEnv(env) });
@@ -98,8 +99,9 @@ test("identity passes my own commit", () => {
 });
 
 test("node-ok passes the contract", () => {
-  const { status, out } = run("node-contract.mjs", ["fixtures/node-ok"]);
+  const { status, out } = copied("node-ok");
   assert.equal(status, 0, out);
+  assert.doesNotMatch(out, /::notice::git cannot read/, out);
   // Guards against NODE_TEST_CONTEXT leaking into the nested `npm test`: if
   // it leaked, node-ok's own `node --test` would skip its files and exit 0
   // without ever running "fixture passes", and this assertion would fail.
@@ -150,12 +152,12 @@ const REJECTS = {
   node: [
     {
       name: "node-broken: a missing test script and a failing lint",
-      run: () => run("node-contract.mjs", ["fixtures/node-broken"]),
+      run: () => copied("node-broken"),
       expect: /no "test" script[\s\S]*::error::lint failed/,
     },
     {
       name: "node-ok in strict a11y mode without test:a11y",
-      run: () => run("node-contract.mjs", ["fixtures/node-ok"], { env: { A11Y: "strict" } }),
+      run: () => copied("node-ok", { env: { A11Y: "strict" } }),
       expect: /no "test:a11y" script/,
     },
     {

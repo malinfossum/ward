@@ -707,30 +707,6 @@ test("a create-vue repo reuses its type-check script instead of a tsc that check
   assert.deepEqual(plan.notes, []);
 });
 
-test("a reused type-check gets a note only where it would check nothing or trust a committed .tsbuildinfo", () => {
-  const notes = (typeCheck, tree) => {
-    const manifest = {
-      name: "x",
-      scripts: { lint: "biome ci .", test: "vitest run", "type-check": typeCheck },
-      devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" },
-    };
-    const dir = repo({ "package.json": JSON.stringify(manifest), ...tree });
-    return planFiles(dir, { templates }).notes;
-  };
-  const refs = { "tsconfig.json": REFS };
-  const [noBuild] = notes("vue-tsc --noEmit", refs);
-  assert.match(noBuild, /^typecheck reuses type-check, which runs without --build/);
-  assert.match(noBuild, /: vue-tsc then checks only the root's own files/);
-  assert.deepEqual(notes("vue-tsc --noEmit", { "tsconfig.json": "{}" }), []);
-  // Older create-vue: the script names the app project itself.
-  assert.deepEqual(notes("vue-tsc --noEmit -p tsconfig.app.json --composite false", refs), []);
-  const committed = { ...refs, "tsconfig.app.tsbuildinfo": "{}" };
-  const [stale] = notes("tsc -b", committed);
-  assert.match(stale, /runs --build without --force while a \.tsbuildinfo is committed: tsc then/);
-  assert.deepEqual(notes("tsc -b --force", committed), []);
-  assert.deepEqual(notes("vue-tsc --build", refs), []);
-});
-
 test("a Vue repo gets vue-tsc before it is installed, with a note to add it", () => {
   const manifest = {
     name: "x",
@@ -747,7 +723,7 @@ test("a Vue repo gets vue-tsc before it is installed, with a note to add it", ()
   ]);
 });
 
-test("vue-tsc is picked for Vue, and references get --build", () => {
+test("vue-tsc is picked for Vue, and a solution-style root gets --build", () => {
   const scripts = { lint: "biome ci .", test: "vitest run" };
   const vue = { name: "x", scripts, devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" } };
   const plain = { name: "x", scripts, devDependencies: { typescript: "6.0.0" } };
@@ -766,16 +742,24 @@ test("vue-tsc is picked for Vue, and references get --build", () => {
   assert.equal(typecheck(plain, '{ "references": [] }'), "tsc --noEmit");
   // "@/*" and "src/**" are strings, not the start of a block comment.
   const aliased = JSON.stringify({
-    compilerOptions: { paths: { "@/*": ["./src/*"] } },
+    compilerOptions: { paths: { "@/*": ["./src/*"] }, typeRoots: ["src/**/types"] },
+    files: [],
     references: [{ path: "./tsconfig.node.json" }],
-    include: ["src/**/*.ts"],
   });
   assert.equal(typecheck(plain, aliased), "tsc --build --force");
   // A trailing comment neither hides references nor invents them.
-  const trailing = '{ "references": [ // app\n { "path": "./tsconfig.app.json" } ] }';
+  const trailing = '{ "files": [], "references": [ // app\n { "path": "./tsconfig.app.json" } ] }';
   assert.equal(typecheck(plain, trailing), "tsc --build --force");
   const invented = '{ "files": [] // "references": [{ "path": "./x.json" }]\n}';
   assert.equal(typecheck(plain, invented), "tsc --noEmit");
+  // Older Vite: the root checks src itself and references a composite
+  // tsconfig.node.json that emits, so --build would write vite.config.js.
+  const ownFiles = JSON.stringify({
+    compilerOptions: { noEmit: true },
+    include: ["src"],
+    references: [{ path: "./tsconfig.node.json" }],
+  });
+  assert.equal(typecheck(plain, ownFiles), "tsc --noEmit");
 });
 
 test("a module in a subfolder reads its own tsconfig.json, and --build comes with a note", () => {
