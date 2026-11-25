@@ -40,6 +40,28 @@ test("trackedChanges lists changed and deleted tracked files from the top, never
   assert.equal(files.get("web/c.js"), null);
 });
 
+test("a submodule counts for an edited tracked file, never for an untracked cache in it", (t) => {
+  const inner = repo({ "s.txt": "s\n" });
+  const dir = repo({ "a.js": "a\n" });
+  t.after(() => {
+    rmSync(inner, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  });
+  run(dir, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", inner, "sub");
+  commit(dir);
+  const around = (lint) => {
+    const before = trackedChanges(dir);
+    lint();
+    return lintCheck(before, trackedChanges(dir));
+  };
+  assert.deepEqual(
+    around(() => writeFileSync(join(dir, "sub/.eslintcache"), "{}")),
+    {},
+  );
+  const edited = around(() => writeFileSync(join(dir, "sub/s.txt"), "S\n"));
+  assert.match(edited.error, /changed tracked files: sub\./);
+});
+
 test("trackedChanges keeps paths from the top when the repo sets diff.relative", (t) => {
   const dir = repo({ "a.js": "a\n", "web/b.js": "b\n" });
   t.after(() => rmSync(dir, { recursive: true, force: true }));

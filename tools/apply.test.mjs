@@ -707,18 +707,28 @@ test("a create-vue repo reuses its type-check script instead of a tsc that check
   assert.deepEqual(plan.notes, []);
 });
 
-test("a reused type-check without --build on a references root comes with a note", () => {
-  const manifest = {
-    name: "x",
-    scripts: { lint: "biome ci .", test: "vitest run", "type-check": "tsc --noEmit" },
-    devDependencies: { typescript: "6.0.0" },
+test("a reused type-check gets a note only where it would check nothing or trust a committed .tsbuildinfo", () => {
+  const notes = (typeCheck, tree) => {
+    const manifest = {
+      name: "x",
+      scripts: { lint: "biome ci .", test: "vitest run", "type-check": typeCheck },
+      devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" },
+    };
+    const dir = repo({ "package.json": JSON.stringify(manifest), ...tree });
+    return planFiles(dir, { templates }).notes;
   };
-  const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": REFS });
-  const { notes } = planFiles(dir, { templates });
-  assert.deepEqual(notes.length, 1, notes.join("\n"));
-  assert.match(notes[0], /^typecheck reuses type-check, which runs without --build/);
-  const flat = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": "{}" });
-  assert.deepEqual(planFiles(flat, { templates }).notes, []);
+  const refs = { "tsconfig.json": REFS };
+  const [noBuild] = notes("vue-tsc --noEmit", refs);
+  assert.match(noBuild, /^typecheck reuses type-check, which runs without --build/);
+  assert.match(noBuild, /: vue-tsc then checks only the root's own files/);
+  assert.deepEqual(notes("vue-tsc --noEmit", { "tsconfig.json": "{}" }), []);
+  // Older create-vue: the script names the app project itself.
+  assert.deepEqual(notes("vue-tsc --noEmit -p tsconfig.app.json --composite false", refs), []);
+  const committed = { ...refs, "tsconfig.app.tsbuildinfo": "{}" };
+  const [stale] = notes("tsc -b", committed);
+  assert.match(stale, /runs --build without --force while a \.tsbuildinfo is committed: tsc then/);
+  assert.deepEqual(notes("tsc -b --force", committed), []);
+  assert.deepEqual(notes("vue-tsc --build", refs), []);
 });
 
 test("a Vue repo gets vue-tsc before it is installed, with a note to add it", () => {

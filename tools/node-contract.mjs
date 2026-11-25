@@ -54,15 +54,17 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
 // not, each with a hash of what is on disk now (null for one that is gone),
 // keyed by its path from the top of the work tree: { head, files }. The flags
 // hold the output to that shape whatever diff.relative or a submodule's
-// ignore setting says. When git cannot read a work tree at dir (none there,
-// no git, no commit yet, a container's dubious ownership), { reason } says why.
+// ignore setting says; a submodule counts when its commit or a tracked file
+// in it changes, never for an untracked cache inside it. When git cannot read
+// a work tree at dir (none there, no git, no commit yet, a container's
+// dubious ownership), { reason } says why.
 export function trackedChanges(dir) {
   const top = git(dir, ["rev-parse", "--show-toplevel"]);
   if (top.status !== 0) return { reason: why(top) };
   const root = top.stdout.trim();
   const head = git(dir, ["rev-parse", "--verify", "HEAD"]);
   if (head.status !== 0) return { reason: why(head) };
-  const flags = ["--name-only", "-z", "--no-relative", "--ignore-submodules=none"];
+  const flags = ["--name-only", "-z", "--no-relative", "--ignore-submodules=untracked"];
   const diff = git(dir, ["diff", ...flags, "HEAD"]);
   if (diff.status !== 0) return { reason: why(diff) };
   const names = diff.stdout.split("\0").filter(Boolean);
@@ -96,7 +98,12 @@ export function rewritten(before, after) {
 const SHOWN = 10;
 
 const FIX_ADVICE =
-  'A lint that fixes what it finds lets CI pass with fixable errors still in the committed code: make lint check-only and move the fixing command to a script lint does not run, such as "fix". A cache or generated file that lint rewrites belongs in .gitignore, untracked';
+  'A lint that fixes what it finds lets CI pass with fixable errors still in the committed code: make lint check-only and move the fixing command to a script lint does not run, such as "fix". A cache or generated file that lint rewrites belongs in .gitignore, untracked.';
+
+// Workflow commands end at a line break and decode %, so a path or a git
+// message that holds one is escaped to stay in its own annotation.
+const escapeData = (text) =>
+  text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 
 // A lint must report, never change the code it checks. Whatever runner or
 // flag does it, a fix shows up as a changed tracked file, staged or not, or as
@@ -144,9 +151,9 @@ function main() {
     console.log("::endgroup::");
     if (step.name === "lint") {
       const { notice, error } = lintCheck(before, trackedChanges(dir));
-      if (notice) console.log(`::notice::${notice}`);
+      if (notice) console.log(`::notice::${escapeData(notice)}`);
       if (error) {
-        console.log(`::error::${error}`);
+        console.log(`::error::${escapeData(error)}`);
         failed++;
       }
     }

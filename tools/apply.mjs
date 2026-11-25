@@ -307,7 +307,29 @@ function typecheckFor(deps, scripts, tsconfig) {
   return hasReferences(tsconfig) ? `${tool} --build --force` : `${tool} --noEmit`;
 }
 
-const BUILD_FLAG = /(?:^|\s)(?:--build|-b)(?:\s|$)/;
+const flag = (...names) => new RegExp(`(?:^|\\s)(?:${names.join("|")})(?:\\s|=|$)`);
+const BUILD_FLAG = flag("--build", "-b");
+const FORCE_FLAG = flag("--force", "-f");
+const PROJECT_FLAG = flag("--project", "-p");
+
+// What a reused type-check script may miss, for the two ways the generated
+// command guards against: no --build on a root with references (unless the
+// script names its own project with -p), and --build without --force where a
+// .tsbuildinfo is committed beside package.json (create-vue keeps its own
+// under node_modules/.tmp, so a stock repo gets no note).
+function reusedNotes(script, files, tsconfig) {
+  const tool = script.match(/(?:^|\s)(vue-tsc|tsc)(?:\s|$)/)?.[1] ?? "the checker";
+  if (BUILD_FLAG.test(script)) {
+    if (FORCE_FLAG.test(script) || !files.some((f) => f.endsWith(".tsbuildinfo"))) return [];
+    return [
+      `typecheck reuses type-check, which runs --build without --force while a .tsbuildinfo is committed: ${tool} then skips a project whose .tsbuildinfo looks newer than its sources. Add --force to it, or untrack the .tsbuildinfo.`,
+    ];
+  }
+  if (!hasReferences(tsconfig) || PROJECT_FLAG.test(script)) return [];
+  return [
+    `typecheck reuses type-check, which runs without --build although tsconfig.json has references: ${tool} then checks only the root's own files, none with "files": []. Add --build to it.`,
+  ];
+}
 
 // tsconfig.json is JSONC: a commented-out "references" line, or an empty
 // list, is no reference. Comments go first, skipping strings, so "@/*" and
@@ -378,12 +400,8 @@ export function missingScripts(pkg, files, tsconfig = "") {
     );
   }
   const reused = scripts["type-check"];
-  if (add.typecheck === "npm run type-check --" && hasReferences(tsconfig)) {
-    if (typeof reused === "string" && !BUILD_FLAG.test(reused)) {
-      notes.push(
-        'typecheck reuses type-check, which runs without --build although tsconfig.json has references: tsc then checks only the root\'s own files, none with "files": []. Add --build to it.',
-      );
-    }
+  if (add.typecheck === "npm run type-check --" && typeof reused === "string") {
+    notes.push(...reusedNotes(reused, files, tsconfig));
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
     notes.push("deploy:check runs wrangler: add wrangler as a devDependency first.");
