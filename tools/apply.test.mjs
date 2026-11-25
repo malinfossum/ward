@@ -1898,10 +1898,10 @@ test("status prints one line with the state, and readState sees classic protecti
     const state = await readState("malinfossum/x", "t");
     assert.equal(state.classic, true);
     assert.deepEqual(state.dependabotPulls, [7]);
-    assert.equal(state.analysed, false);
+    assert.equal(state.analyzed, false);
     assert.equal(
       statusLine(state),
-      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled private-reporting=false default-setup=not-configured analysed=false rulesets=0+classic rules=deletion,required_status_checks",
+      "malinfossum/x: auto-merge=false delete-branch=false secret-scanning=disabled push-protection=disabled private-reporting=false default-setup=not-configured analyzed=false rulesets=0+classic rules=deletion,required_status_checks",
     );
     const { lines } = await runApply(["status", "malinfossum/x"], ENV);
     assert.equal(lines[0], `status  ${statusLine(state)}`);
@@ -2010,7 +2010,7 @@ const state = (over = {}) => ({
   rulesetsRead: true,
   rulesets: [],
   existing: null,
-  analysed: true,
+  analyzed: true,
   dependabotPulls: [],
   ...over,
 });
@@ -2026,15 +2026,15 @@ test("planRuleset: classic protection or two rulesets stop; no CodeQL analysis w
   );
   const two = planRuleset(state({ rulesets: [{ id: 1 }, { id: 2 }] }), RULESET);
   assert.match(two.stops[0], /More than one branch ruleset \(1, 2\)/);
-  const waiting = planRuleset(state({ analysed: false }), RULESET);
-  assert.match(waiting.wait, /CodeQL has not analysed main yet/);
+  const waiting = planRuleset(state({ analyzed: false }), RULESET);
+  assert.match(waiting.wait, /CodeQL has not analyzed main yet/);
   assert.equal(waiting.action, "");
   const noLanguage = state({
-    analysed: false,
+    analyzed: false,
     baseline: { rules: [], codeScanning: { languages: [] } },
   });
-  assert.match(planRuleset(noLanguage, RULESET).wait, /never analyse it; rerun with --no-codeql/);
-  const skipped = planRuleset(state({ analysed: false }), RULESET, { noCodeql: true });
+  assert.match(planRuleset(noLanguage, RULESET).wait, /never analyze it; rerun with --no-codeql/);
+  const skipped = planRuleset(state({ analyzed: false }), RULESET, { noCodeql: true });
   assert.equal(skipped.action, "create");
   assert.ok(!types(skipped.body).includes("code_scanning"));
 });
@@ -2100,7 +2100,7 @@ test("ruleset command: POST when none, PUT by id when one, nothing without --app
   try {
     const wait = await runApply(["ruleset", "malinfossum/x", "--apply"], ENV);
     assert.equal(wait.exitCode, 1);
-    assert.ok(wait.lines[0].startsWith("wait    CodeQL has not analysed main yet"));
+    assert.ok(wait.lines[0].startsWith("wait    CodeQL has not analyzed main yet"));
     assert.deepEqual(waiting.writes(), []);
   } finally {
     waiting.restore();

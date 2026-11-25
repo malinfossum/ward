@@ -1,5 +1,5 @@
-# CodeQL as a workflow, so a pull request from a fork gets analysed too; default
-# setup never analyses one. A repo calls this from its caller as the codeql job,
+# CodeQL as a workflow, so a pull request from a fork gets analyzed too; default
+# setup never analyzes one. A repo calls this from its caller as the codeql job,
 # pinned to a full commit SHA, because analyze holds security-events: write.
 # Every language runs with build-mode none: no build step and no npm hook
 # runs here. C# buildless extraction still runs dotnet restore, so the guard

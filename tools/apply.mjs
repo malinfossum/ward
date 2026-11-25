@@ -840,7 +840,7 @@ export async function readState(repo, token, { metaOnlyIfArchived = false } = {}
     rulesetsRead: listed.status === 200 && ![401, 403].includes(protection.status),
     rulesets,
     existing,
-    analysed: Array.isArray(analyses) && analyses.length > 0,
+    analyzed: Array.isArray(analyses) && analyses.length > 0,
     dependabotPulls: pulls.filter((p) => p.user?.login === "dependabot[bot]").map((p) => p.number),
   };
 }
@@ -974,7 +974,7 @@ export function statusLine(state) {
     `push-protection=${analysis.secret_scanning_push_protection?.status ?? "unread"}`,
     `private-reporting=${state.baseline.privateReporting ?? "unread"}`,
     `default-setup=${state.baseline.codeScanning?.state ?? "unread"}`,
-    `analysed=${state.analysed}`,
+    `analyzed=${state.analyzed}`,
     `rulesets=${state.rulesetsRead ? state.rulesets.length : "unread"}${state.classic ? "+classic" : ""}`,
     `rules=${rules ? types.join(",") || "none" : "unread"}`,
   ].join(" ");
@@ -1225,12 +1225,12 @@ export function planRuleset(state, template, { bypassAdmin = false, noCodeql = f
     );
   }
   if (stops.length) return { stops, wait: "", action: "", body: null };
-  if (!noCodeql && !state.analysed) {
+  if (!noCodeql && !state.analyzed) {
     // A repo CodeQL has no language for never gets an analysis; waiting would never end.
     const none = state.baseline.codeScanning?.languages?.length === 0;
     const wait = none
-      ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
-      : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
+      ? `CodeQL has no language to analyze on ${state.branch}, so it will never analyze it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
+      : `CodeQL has not analyzed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
     return { stops, wait, action: "", body: null };
   }
   const body = mergeRuleset(template, state.existing, { bypassAdmin, noCodeql });
