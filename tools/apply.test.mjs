@@ -779,6 +779,79 @@ test("a module in a subfolder reads its own tsconfig.json, and --build comes wit
   );
 });
 
+test("a Svelte repo gets svelte-check, reuses its check script, and is asked on a solution-style root", () => {
+  const scripts = { lint: "biome ci .", test: "vitest run" };
+  const svelte = { name: "x", scripts, devDependencies: { svelte: "5.43.0" } };
+  const planFor = (manifest, tsconfig) => {
+    const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": tsconfig });
+    return planFiles(dir, { templates });
+  };
+  const fresh = planFor(svelte, "{}");
+  const edit = fresh.files.find((f) => f.action === "edit");
+  assert.equal(
+    JSON.parse(edit.content).scripts.typecheck,
+    "svelte-check --tsconfig ./tsconfig.json",
+  );
+  assert.deepEqual(fresh.notes, [
+    "typecheck runs svelte-check, the only checker that reads .svelte files: add svelte-check and typescript as devDependencies first.",
+  ]);
+  const check = "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json";
+  const vite = { ...svelte, scripts: { ...scripts, check } };
+  const reused = planFor(vite, REFS).files.find((f) => f.action === "edit");
+  assert.equal(JSON.parse(reused.content).scripts.typecheck, "npm run check --");
+  // check is reused only where Svelte names it so.
+  const plain = { name: "x", scripts: { ...scripts, check: "x" }, devDependencies: {} };
+  const own = planFor(plain, "{}").files.find((f) => f.action === "edit");
+  assert.equal(JSON.parse(own.content).scripts.typecheck, "tsc --noEmit");
+  // svelte-check reads one tsconfig, and a solution root names no files.
+  const asked = planFor(svelte, REFS);
+  assert.ok(!asked.files.some((f) => f.action === "edit"));
+  assert.ok(asked.files.some((f) => f.action === "ask" && /"typecheck" script/.test(f.detail)));
+  assert.ok(asked.notes.some((n) => /^typecheck: svelte-check reads one tsconfig/.test(n)));
+});
+
+test("the tsc --noEmit that apply used to write is drift where it misses files", () => {
+  const planFor = (deps, tsconfig, more = {}) => {
+    const scripts = { lint: "biome ci .", test: "vitest run", typecheck: "tsc --noEmit", ...more };
+    const manifest = { name: "x", scripts, devDependencies: deps };
+    const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": tsconfig });
+    return planFiles(dir, { templates });
+  };
+  const ts = { typescript: "6.0.0" };
+  assert.equal(file(planFor(ts, "{}"), "package.json").action, "keep");
+  assert.equal(
+    file(planFor(ts, REFS), "package.json").detail,
+    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json: change it to "tsc --build --force"',
+  );
+  const vue = { ...ts, vue: "3.5.0" };
+  assert.equal(
+    file(planFor(vue, REFS, { "type-check": "vue-tsc --build" }), "package.json").detail,
+    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "npm run type-check --"',
+  );
+  assert.equal(
+    file(planFor({ ...ts, svelte: "5.43.0" }, REFS), "package.json").detail,
+    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .svelte files: point svelte-check at the tsconfig that holds the app',
+  );
+  // Any other script is the repo's own and trusted as is.
+  const own = planFor(vue, REFS, { typecheck: "tsc --noEmit -p tsconfig.app.json" });
+  assert.equal(file(own, "package.json").action, "keep");
+});
+
+test("a node input naming a folder without package.json is a stop", async () => {
+  const dir = repo({
+    "a/package.json": PKG,
+    "b/package.json": PKG,
+    [CALLER]: caller({ node: "c" }),
+  });
+  const plan = planFiles(dir, { templates });
+  assert.equal(plan.inputs.node, "c");
+  assert.deepEqual(plan.stops, [
+    { module: "node", text: "c/package.json is missing: the caller's node input names c." },
+  ]);
+  const run = await runApply(["files", "--dir", dir, "--apply"], {}, { templates });
+  assert.equal(run.exitCode, 1);
+});
+
 test("a module in the exceptions stays off in the caller and is noted with its reason", () => {
   const dir = repo({ "package.json": PKG, "App.slnx": "", "src/App/App.csproj": SQLITE });
   const reason = "Course repo with one solution per week (2026-10-02).";
