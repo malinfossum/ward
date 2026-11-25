@@ -295,15 +295,19 @@ export function listTree(dir, stacks) {
 
 // The type check a repo's own setup calls for. A type-check script (create-vue
 // names it so) is reused rather than copied. vue-tsc is the only checker that
-// reads .vue files. A tsconfig.json with references (the Vite and create-vue
-// layout, often with "files": []) needs --build: without it, tsc checks no
-// files and passes.
+// reads .vue files, so a Vue repo gets it even before it is installed. A
+// tsconfig.json with references (the Vite and create-vue layout, often with
+// "files": []) needs --build: without it, tsc checks no files and passes.
+// --force rebuilds every time, since --build trusts a .tsbuildinfo newer than
+// the sources, and one committed by mistake would skip the check.
 function typecheckFor(deps, scripts, tsconfig) {
   if ("astro" in deps) return "astro check";
   if (Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
-  const tool = "vue-tsc" in deps ? "vue-tsc" : "tsc";
-  return hasReferences(tsconfig) ? `${tool} --build` : `${tool} --noEmit`;
+  const tool = "vue-tsc" in deps || "vue" in deps ? "vue-tsc" : "tsc";
+  return hasReferences(tsconfig) ? `${tool} --build --force` : `${tool} --noEmit`;
 }
+
+const BUILD_FLAG = /(?:^|\s)(?:--build|-b)(?:\s|$)/;
 
 // tsconfig.json is JSONC: a commented-out "references" line, or an empty
 // list, is no reference. Comments go first, skipping strings, so "@/*" and
@@ -359,10 +363,27 @@ export function missingScripts(pkg, files, tsconfig = "") {
   if (add.typecheck?.startsWith("tsc ") && !("typescript" in deps)) {
     notes.push("typecheck runs tsc: add typescript as a devDependency first.");
   }
-  if (add.typecheck?.endsWith(" --build")) {
+  if (add.typecheck?.startsWith("vue-tsc ")) {
+    const needed = ["vue-tsc", "typescript"].filter((name) => !(name in deps));
+    if (needed.length) {
+      const as = needed.length === 1 ? "a devDependency" : "devDependencies";
+      notes.push(
+        `typecheck runs vue-tsc, the only checker that reads .vue files: add ${needed.join(" and ")} as ${as} first.`,
+      );
+    }
+  }
+  if (add.typecheck?.includes(" --build")) {
     notes.push(
       'typecheck runs --build, which emits for any tsconfig it builds without noEmit: each referenced tsconfig must set noEmit, and the root too unless it has "files": []. --build still writes a .tsbuildinfo beside each one, so point tsBuildInfoFile under node_modules/.tmp (create-vue does).',
     );
+  }
+  const reused = scripts["type-check"];
+  if (add.typecheck === "npm run type-check --" && hasReferences(tsconfig)) {
+    if (typeof reused === "string" && !BUILD_FLAG.test(reused)) {
+      notes.push(
+        'typecheck reuses type-check, which runs without --build although tsconfig.json has references: tsc then checks only the root\'s own files, none with "files": []. Add --build to it.',
+      );
+    }
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
     notes.push("deploy:check runs wrangler: add wrangler as a devDependency first.");

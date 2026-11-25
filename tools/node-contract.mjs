@@ -50,18 +50,24 @@ export function planSteps({ scripts, files, a11y, hasPlaywright }) {
   return { steps, missing };
 }
 
-// The tracked files that differ from the index, each with a hash of what is on
-// disk now (null for one that is gone), keyed by its path from the top of the
-// work tree: { files }. When git cannot read a work tree at dir (none there, no
-// git, a container's dubious ownership), { reason } says why.
+// The commit checked out and the tracked files that differ from it, staged or
+// not, each with a hash of what is on disk now (null for one that is gone),
+// keyed by its path from the top of the work tree: { head, files }. The flags
+// hold the output to that shape whatever diff.relative or a submodule's
+// ignore setting says. When git cannot read a work tree at dir (none there,
+// no git, no commit yet, a container's dubious ownership), { reason } says why.
 export function trackedChanges(dir) {
   const top = git(dir, ["rev-parse", "--show-toplevel"]);
   if (top.status !== 0) return { reason: why(top) };
   const root = top.stdout.trim();
-  const diff = git(dir, ["diff", "--name-only", "-z"]);
+  const head = git(dir, ["rev-parse", "--verify", "HEAD"]);
+  if (head.status !== 0) return { reason: why(head) };
+  const flags = ["--name-only", "-z", "--no-relative", "--ignore-submodules=none"];
+  const diff = git(dir, ["diff", ...flags, "HEAD"]);
   if (diff.status !== 0) return { reason: why(diff) };
   const names = diff.stdout.split("\0").filter(Boolean);
-  return { files: new Map(names.map((name) => [name, hashOf(join(root, name))])) };
+  const files = new Map(names.map((name) => [name, hashOf(join(root, name))]));
+  return { head: head.stdout.trim(), files };
 }
 
 const why = (result) =>
@@ -89,24 +95,29 @@ export function rewritten(before, after) {
 
 const SHOWN = 10;
 
-// A lint that fixes what it finds instead of reporting it lets CI pass with
-// fixable errors still in the committed code. Whatever runner or flag does
-// it, the fix shows up as a changed tracked file; caches and other untracked
-// files are fine. A fix that writes nothing (--fix-dry-run) is not seen.
-function lintCheck(before, after) {
+const FIX_ADVICE =
+  'A lint that fixes what it finds lets CI pass with fixable errors still in the committed code: make lint check-only and move the fixing command to a script lint does not run, such as "fix". A cache or generated file that lint rewrites belongs in .gitignore, untracked';
+
+// A lint must report, never change the code it checks. Whatever runner or
+// flag does it, a fix shows up as a changed tracked file, staged or not, or as
+// a new commit; caches and other untracked files are fine. A fix that writes
+// nothing (--fix-dry-run) is not seen. before and after are trackedChanges
+// snapshots taken around the lint step.
+export function lintCheck(before, after) {
   const reason = before.reason ?? after.reason;
   if (reason) {
     return {
       notice: `git cannot read a work tree here (${reason}), so the gate cannot see whether npm run lint changed files`,
     };
   }
+  if (before.head !== after.head) {
+    return { error: `npm run lint made a commit (${after.head.slice(0, 12)}). ${FIX_ADVICE}` };
+  }
   const changed = rewritten(before.files, after.files);
   if (!changed.length) return {};
   const more = changed.length > SHOWN ? ` and ${changed.length - SHOWN} more` : "";
   const list = changed.slice(0, SHOWN).join(", ") + more;
-  return {
-    error: `npm run lint changed ${list}: it fixes problems instead of reporting them, so CI passes with fixable errors still in the code. Make lint check-only and move the fixing command to a script lint does not run, such as "fix"`,
-  };
+  return { error: `npm run lint changed tracked files: ${list}. ${FIX_ADVICE}` };
 }
 
 function main() {

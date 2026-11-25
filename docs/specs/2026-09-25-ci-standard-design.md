@@ -311,7 +311,7 @@ where I can read and run them locally:
 Functional e2e and accessibility are separate scripts so that `warn` softens only the accessibility
 checks: a broken user flow fails the gate in every mode.
 
-Per stack, `typecheck` is `astro check` (Astro), the repo's own `type-check` script, or `tsc`/`vue-tsc` (Vue) with `--build` when `tsconfig.json` has references and `--noEmit` otherwise (changed 24.11.2026, see `docs/apply.md`). Workers unit tests
+Per stack, `typecheck` is `astro check` (Astro), the repo's own `type-check` script, or `tsc`/`vue-tsc` (Vue) with `--build --force` when `tsconfig.json` has references and `--noEmit` otherwise (changed 24.11.2026, see `docs/apply.md`). Workers unit tests
 use `@cloudflare/vitest-pool-workers`. Node version input defaults to **24** (Active LTS today).
 
 ### dotnet — console, layered, WPF, ASP.NET Core + EF

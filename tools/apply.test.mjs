@@ -707,6 +707,36 @@ test("a create-vue repo reuses its type-check script instead of a tsc that check
   assert.deepEqual(plan.notes, []);
 });
 
+test("a reused type-check without --build on a references root comes with a note", () => {
+  const manifest = {
+    name: "x",
+    scripts: { lint: "biome ci .", test: "vitest run", "type-check": "tsc --noEmit" },
+    devDependencies: { typescript: "6.0.0" },
+  };
+  const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": REFS });
+  const { notes } = planFiles(dir, { templates });
+  assert.deepEqual(notes.length, 1, notes.join("\n"));
+  assert.match(notes[0], /^typecheck reuses type-check, which runs without --build/);
+  const flat = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": "{}" });
+  assert.deepEqual(planFiles(flat, { templates }).notes, []);
+});
+
+test("a Vue repo gets vue-tsc before it is installed, with a note to add it", () => {
+  const manifest = {
+    name: "x",
+    scripts: { lint: "biome ci .", test: "vitest run" },
+    dependencies: { vue: "3.5.0" },
+    devDependencies: { typescript: "6.0.0" },
+  };
+  const dir = repo({ "package.json": JSON.stringify(manifest), "tsconfig.json": "{}" });
+  const plan = planFiles(dir, { templates });
+  const edit = plan.files.find((f) => f.action === "edit");
+  assert.equal(JSON.parse(edit.content).scripts.typecheck, "vue-tsc --noEmit");
+  assert.deepEqual(plan.notes, [
+    "typecheck runs vue-tsc, the only checker that reads .vue files: add vue-tsc as a devDependency first.",
+  ]);
+});
+
 test("vue-tsc is picked for Vue, and references get --build", () => {
   const scripts = { lint: "biome ci .", test: "vitest run" };
   const vue = { name: "x", scripts, devDependencies: { "vue-tsc": "3.3.11", typescript: "6.0.0" } };
@@ -716,9 +746,9 @@ test("vue-tsc is picked for Vue, and references get --build", () => {
     const edit = planFiles(dir, { templates }).files.find((f) => f.action === "edit");
     return JSON.parse(edit.content).scripts.typecheck;
   };
-  assert.equal(typecheck(vue, REFS), "vue-tsc --build");
+  assert.equal(typecheck(vue, REFS), "vue-tsc --build --force");
   assert.equal(typecheck(vue, "{}"), "vue-tsc --noEmit");
-  assert.equal(typecheck(plain, REFS), "tsc --build");
+  assert.equal(typecheck(plain, REFS), "tsc --build --force");
   assert.equal(typecheck(plain, "{}"), "tsc --noEmit");
   // JSONC: a commented-out or empty references list is no reference.
   const commented = '{\n  // "references": [{ "path": "./tsconfig.node.json" }]\n}';
@@ -730,10 +760,10 @@ test("vue-tsc is picked for Vue, and references get --build", () => {
     references: [{ path: "./tsconfig.node.json" }],
     include: ["src/**/*.ts"],
   });
-  assert.equal(typecheck(plain, aliased), "tsc --build");
+  assert.equal(typecheck(plain, aliased), "tsc --build --force");
   // A trailing comment neither hides references nor invents them.
   const trailing = '{ "references": [ // app\n { "path": "./tsconfig.app.json" } ] }';
-  assert.equal(typecheck(plain, trailing), "tsc --build");
+  assert.equal(typecheck(plain, trailing), "tsc --build --force");
   const invented = '{ "files": [] // "references": [{ "path": "./x.json" }]\n}';
   assert.equal(typecheck(plain, invented), "tsc --noEmit");
 });
@@ -748,7 +778,7 @@ test("a module in a subfolder reads its own tsconfig.json, and --build comes wit
   const plan = planFiles(dir, { templates });
   assert.equal(plan.inputs.node, "web");
   const edit = plan.files.find((f) => f.path === "web/package.json" && f.action === "edit");
-  assert.equal(JSON.parse(edit.content).scripts.typecheck, "tsc --build");
+  assert.equal(JSON.parse(edit.content).scripts.typecheck, "tsc --build --force");
   assert.ok(
     plan.notes.some((n) => /^typecheck runs --build/.test(n)),
     plan.notes.join("\n"),

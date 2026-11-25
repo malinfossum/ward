@@ -161,7 +161,7 @@ const REJECTS = {
     {
       name: "node-lint-fix: a lint that passes only because it rewrites a tracked file",
       run: () => copied("node-lint-fix"),
-      expect: /::error::npm run lint changed src\.js: it fixes problems instead of reporting them/,
+      expect: /::error::npm run lint changed tracked files: src\.js\. A lint that fixes/,
     },
   ],
   dotnet: [
