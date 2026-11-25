@@ -48,6 +48,8 @@ runtimes near end of life, and the canary ([docs](docs/repo-audit.md)).
 [`canary.yml`](.github/workflows/canary.yml) runs the published `@v1` every Monday and after every release,
 as a consumer would, and watches that the audit keeps running.
 
+What Ward is for, how it is built and where it stands: [project note](docs/project-note.md).
+
 ## Develop
 
 ```bash
