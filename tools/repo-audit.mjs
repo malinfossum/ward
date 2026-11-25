@@ -165,6 +165,10 @@ export const bareDir = (value) => {
   return parts.join("/") || ".";
 };
 
+// The package.json a bareDir names, for apply and the audit alike.
+export const manifestIn = (dir) =>
+  dir === "." ? "package.json" : `${dir === "/" ? "" : dir}/package.json`;
+
 // A module the repo's files need must be on, and an input that is on must
 // point at something on the default branch. A merged PR that turned a module
 // off or moved a project shows up here. inputs is null when there is no caller;
@@ -210,7 +214,7 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
   const node = inputs.node ?? "";
   if (node) {
     const dir = bareDir(node);
-    const manifest = dir === "." ? "package.json" : `${dir === "/" ? "" : dir}/package.json`;
+    const manifest = manifestIn(dir);
     if (!have.has(manifest)) {
       findings.push([
         "inputs",
@@ -590,9 +594,11 @@ export function expectsAdminRead(owner, env) {
 }
 
 // The warning set for one owner: WARN_KINDS, minus token where admin read is
-// promised, plus the kinds --warn-kinds names for this run.
+// promised, plus the kinds --warn-kinds names for this run. ruleset brings
+// read along: the rules read feeds only ruleset findings, as with a deferral.
 export function warnKindsFor(owner, env, extra = []) {
   const kinds = new Set([...WARN_KINDS, ...extra]);
+  if (kinds.has("ruleset")) kinds.add("read");
   if (expectsAdminRead(owner, env)) kinds.delete("token");
   return kinds;
 }

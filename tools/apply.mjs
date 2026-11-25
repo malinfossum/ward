@@ -27,6 +27,7 @@ import {
   exceptionsFor,
   fetchRepoData,
   indentOf,
+  manifestIn,
   parseCaller,
   REQUIRED_CHECK,
   readDependabot,
@@ -558,8 +559,6 @@ export function addCodeqlJob(text, template) {
 // The audit reads caller inputs the same way: one normalizer for both.
 const bare = bareDir;
 const sameDir = (a, b) => bare(a.replace(/^\//, "")) === bare(b.replace(/^\//, ""));
-const manifestIn = (dir) =>
-  dir === "." ? "package.json" : `${dir === "/" ? "" : dir}/package.json`;
 
 // `dotnet: "."` next to a planned `App.slnx` at the root is the same choice.
 function sameInput(key, current, planned) {
@@ -1217,16 +1216,21 @@ export function planRuleset(state, template, { bypassAdmin = false, noCodeql = f
     const ids = state.rulesets.map((r) => r.id).join(", ");
     stops.push(`More than one branch ruleset (${ids}); keep one, delete the rest, rerun.`);
   }
+  // With no commits, the first push is itself a push to the default branch,
+  // which the pull-request rule refuses, whatever the flags. An empty repo has
+  // no language for CodeQL either, only because it has no code yet.
+  if (state.empty) {
+    stops.push(
+      `${state.repo} has no commits yet, and the ruleset's pull-request rule would refuse the first push to ${state.branch}; push it first, then rerun.`,
+    );
+  }
   if (stops.length) return { stops, wait: "", action: "", body: null };
   if (!noCodeql && !state.analysed) {
     // A repo CodeQL has no language for never gets an analysis; waiting would never end.
-    // An empty repo has no language either, only because it has no code yet.
     const none = state.baseline.codeScanning?.languages?.length === 0;
-    const wait = state.empty
-      ? `${state.repo} has no commits yet, so CodeQL has nothing to analyze; push the first commit, then rerun once CodeQL has analyzed ${state.branch}.`
-      : none
-        ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
-        : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
+    const wait = none
+      ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
+      : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
     return { stops, wait, action: "", body: null };
   }
   const body = mergeRuleset(template, state.existing, { bypassAdmin, noCodeql });

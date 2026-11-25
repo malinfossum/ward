@@ -33,7 +33,8 @@ A private reporting read that fails is a `note`, never a `stop`: the read needs 
 repo is read-only: `status` reads private reporting there as `n/a` too, and every other command
 stops before it plans anything (`files` can tell only with `GITHUB_TOKEN` set). An empty repo (no
 commits yet, its tree answers 409) reads as one with no files: `status` and `settings` read it in
-full, `ruleset` waits for CodeQL's first analysis, and `automerge` stops until the ruleset is there.
+full, `ruleset` stops whatever the flags (its pull-request rule would refuse the first push), and
+`automerge` stops until the ruleset is there.
 
 CodeQL runs as the caller's `codeql` job, which calls Ward's `codeql.yml` at a pinned commit, and
 GitHub refuses its uploads while default setup is on. Before it plans default setup off, `settings`
@@ -75,7 +76,7 @@ One line per decision, a word padded to seven characters and then the text:
 | `ask` | A choice that is mine: a `test` script's runner, a Svelte `typecheck` on a solution-style `tsconfig.json` (svelte-check reads one tsconfig, so I name the app's; beside a `type-check` script it offers that too), or `Directory.Build.props` on a repo already on Ward |
 | `note` | A package a new script, or the fix a `drift` names, needs (I install it, the script never does), which tsconfig a Svelte `typecheck` should name, the repo's own `type-check` offered in place of the `typecheck` it adds, a `typecheck` with `--build` (each referenced tsconfig must set `noEmit`; `--build` still writes a `.tsbuildinfo` beside each, so `tsBuildInfoFile` belongs under `node_modules/.tmp`), or a CodeQL remark: default setup stays on until a caller has the `codeql` job, wait for `status` after turning it off, leave the job out on a private repo, what a private repo without GHAS goes without, a repo `files` could not read |
 | `warn` | Files of a stack no module covers yet; the covered modules still apply, and the module is the next PR to Ward |
-| `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, a `node` input the caller set to settle a tie that names a folder without `package.json`, a `package.json` that is not valid JSON, a `package.json` that is not a JSON object, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not, an archived repo (every command but `status`; `files` can tell only with `GITHUB_TOKEN` set). Exit 1, nothing written |
+| `stop` | A precondition is not met: two candidates at one depth for an input no existing caller sets, a `node` input the caller set to settle a tie that names a folder without `package.json`, a `package.json` that is not valid JSON, a `package.json` that is not a JSON object, classic branch protection, two branch rulesets, a ruleset on a private repo on GitHub Free, a setting the token cannot read, auto-merge before the gate, a `--dir` that is not a readable checkout of the repo, default setup that does not list its languages, a language default setup scans that the `codeql` job would not, `ruleset` on an empty repo, an archived repo (every command but `status`; `files` can tell only with `GITHUB_TOKEN` set). Exit 1, nothing written |
 | `wait` | CodeQL has not analyzed the default branch yet; rerun later. Exit 1 |
 | `set` | A setting that would be turned on, or CodeQL default setup that would be turned off |
 | `update` | A ruleset that exists and differs from the template; `--apply` brings it in line and keeps the repo's own rule types and checks |

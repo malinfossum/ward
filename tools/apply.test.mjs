@@ -1777,11 +1777,11 @@ test("an empty repo reads as one with no files: every settings command gives a r
       assert.ok(!out.lines.some((line) => line.startsWith("error")), out.lines.join("\n"));
       first[command] = [out.exitCode, out.lines[0].split(" ")[0]];
     }
-    // CodeQL has nothing to analyze yet, and no ruleset requires the gate.
+    // A ruleset would refuse the first push, and no ruleset requires the gate.
     assert.deepEqual(first, {
       status: [0, "status"],
       settings: [0, "set"],
-      ruleset: [1, "wait"],
+      ruleset: [1, "stop"],
       automerge: [1, "stop"],
     });
     // Nothing past the tree is read for files that are not there.
@@ -1790,17 +1790,23 @@ test("an empty repo reads as one with no files: every settings command gives a r
     stub.restore();
   }
   // With no code, default setup finds no language; the repo is new, not exempt.
+  // --no-codeql skips CodeQL's wait, never the first push.
   const noLanguage = stubFetch(
     bareRoutes([
       [/\/git\/trees\//, 409, { message: "Git Repository is empty." }, "GET"],
       [/\/code-scanning\/default-setup$/, 200, { state: "not-configured", languages: [] }, "GET"],
+      [/\/rulesets$/, 201, {}, "POST"],
     ]),
   );
   try {
-    const out = await runApply(["ruleset", "malinfossum/x"], ENV);
-    assert.deepEqual(out.lines, [
-      "wait    malinfossum/x has no commits yet, so CodeQL has nothing to analyze; push the first commit, then rerun once CodeQL has analyzed main.",
-    ]);
+    for (const flags of [[], ["--no-codeql", "--apply"]]) {
+      const out = await runApply(["ruleset", "malinfossum/x", ...flags], ENV);
+      assert.equal(out.exitCode, 1, flags.join(" "));
+      assert.deepEqual(out.lines, [
+        "stop    malinfossum/x has no commits yet, and the ruleset's pull-request rule would refuse the first push to main; push it first, then rerun.",
+      ]);
+    }
+    assert.deepEqual(noLanguage.writes(), []);
   } finally {
     noLanguage.restore();
   }

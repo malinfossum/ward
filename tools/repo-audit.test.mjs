@@ -443,6 +443,8 @@ test("unread branch rules are a read finding, never the Administration sentence"
   // read never used that token, so it fails there as on my own repos.
   assert.equal(hardCount(findings, warnKindsFor("rookdex", {})), 1);
   assert.equal(hardCount(findings, warnKindsFor("malinfossum", {})), 2);
+  // --warn-kinds ruleset softens the read that feeds only ruleset findings.
+  assert.equal(hardCount(findings, warnKindsFor("malinfossum", {}, ["ruleset"])), 1);
 });
 
 const PROPS = `<Project>
