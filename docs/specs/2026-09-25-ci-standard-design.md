@@ -300,7 +300,7 @@ where I can read and run them locally:
 | Step | Command | Required |
 |---|---|---|
 | Install | `npm ci` | always |
-| Lint + format | `npm run lint` (Biome `biome ci`) | always |
+| Lint + format | `npm run lint` (Biome `biome ci`); fails when it changes a tracked file, since a lint that fixes lets CI pass with fixable errors still committed (a fix that writes nothing, such as `--fix-dry-run`, is not seen; skipped with a notice outside a git work tree) | always |
 | Types | `npm run typecheck` | when `tsconfig.json` or `astro.config.*` exists |
 | Unit | `npm test` | always |
 | Build | `npm run build` | when present |
@@ -311,7 +311,7 @@ where I can read and run them locally:
 Functional e2e and accessibility are separate scripts so that `warn` softens only the accessibility
 checks: a broken user flow fails the gate in every mode.
 
-Per stack, `typecheck` is `tsc --noEmit` (React/Workers) or `astro check` (Astro). Workers unit tests
+Per stack, `typecheck` is `astro check` (Astro), the repo's own `type-check` script, or `tsc`/`vue-tsc` (Vue) with `--build --force` when `tsconfig.json` is solution-style (`"files": []` with references) and `--noEmit` otherwise (changed 24.11.2026, see `docs/apply.md`). Workers unit tests
 use `@cloudflare/vitest-pool-workers`. Node version input defaults to **24** (Active LTS today).
 
 ### dotnet — console, layered, WPF, ASP.NET Core + EF

@@ -293,16 +293,62 @@ export function listTree(dir, stacks) {
   return (gitFiles(dir) ?? walked()).filter((path) => !ignored(path, stacks.ignore)).sort();
 }
 
+// The type check a repo's own setup calls for. A type-check script (create-vue
+// names it so) is reused rather than copied. vue-tsc is the only checker that
+// reads .vue files, so a Vue repo gets it even before it is installed. A
+// solution-style tsconfig.json (the Vite and create-vue layout: "files": []
+// and references) needs --build: without it, tsc checks no files and passes.
+// A root with files of its own keeps --noEmit, which checks them and writes
+// nothing, where --build would emit for a referenced tsconfig without noEmit
+// (older Vite's tsconfig.node.json, whose vite.config.js then shadows the .ts).
+// --force rebuilds every time, since --build trusts a .tsbuildinfo newer than
+// the sources, and one committed by mistake would skip the check.
+function typecheckFor(deps, scripts, tsconfig) {
+  if ("astro" in deps) return "astro check";
+  if (Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
+  const tool = "vue-tsc" in deps || "vue" in deps ? "vue-tsc" : "tsc";
+  return isSolution(tsconfig) ? `${tool} --build --force` : `${tool} --noEmit`;
+}
+
+// tsconfig.json is JSONC: a commented-out "references" line, or an empty
+// list, is no reference. Comments go first, skipping strings, so "@/*" and
+// "src/**" in paths and globs are never read as the start of a comment.
+function isSolution(tsconfig) {
+  const text = withoutComments(tsconfig);
+  return /"files"\s*:\s*\[\s*\]/.test(text) && /"references"\s*:\s*\[\s*\{/.test(text);
+}
+
+function withoutComments(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '"') {
+      const start = i++;
+      while (i < text.length && text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
+      out += text.slice(start, ++i);
+    } else if (text.startsWith("//", i)) {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (text.startsWith("/*", i)) {
+      const end = text.indexOf("*/", i + 2);
+      i = end === -1 ? text.length : end + 2;
+    } else {
+      out += text[i++];
+    }
+  }
+  return out;
+}
+
 const SCRIPT_FOR = {
   lint: () => "biome ci .",
-  typecheck: (deps) => ("astro" in deps ? "astro check" : "tsc --noEmit"),
+  typecheck: typecheckFor,
   "deploy:check": () => "wrangler deploy --dry-run",
 };
 
 // The scripts the node contract requires and package.json lacks, with the
 // standard command for each. test is never guessed: the runner is mine to
 // pick. A note names the package a script needs; nothing is installed here.
-export function missingScripts(pkg, files) {
+// tsconfig is the text of the module's tsconfig.json, "" when it has none.
+export function missingScripts(pkg, files, tsconfig = "") {
   const scripts = pkg.scripts ?? {};
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const { missing } = planSteps({ scripts, files, a11y: "off", hasPlaywright: false });
@@ -310,14 +356,28 @@ export function missingScripts(pkg, files) {
   const ask = [];
   const notes = [];
   for (const name of missing) {
-    if (SCRIPT_FOR[name]) add[name] = SCRIPT_FOR[name](deps);
+    if (SCRIPT_FOR[name]) add[name] = SCRIPT_FOR[name](deps, scripts, tsconfig);
     else ask.push(name);
   }
   if (add.lint && !("@biomejs/biome" in deps)) {
     notes.push("lint runs Biome: add @biomejs/biome as a devDependency and a biome.json first.");
   }
-  if (add.typecheck === "tsc --noEmit" && !("typescript" in deps)) {
+  if (add.typecheck?.startsWith("tsc ") && !("typescript" in deps)) {
     notes.push("typecheck runs tsc: add typescript as a devDependency first.");
+  }
+  if (add.typecheck?.startsWith("vue-tsc ")) {
+    const needed = ["vue-tsc", "typescript"].filter((name) => !(name in deps));
+    if (needed.length) {
+      const as = needed.length === 1 ? "a devDependency" : "devDependencies";
+      notes.push(
+        `typecheck runs vue-tsc, the only checker that reads .vue files: add ${needed.join(" and ")} as ${as} first.`,
+      );
+    }
+  }
+  if (add.typecheck?.includes(" --build")) {
+    notes.push(
+      "typecheck runs --build, which emits for any tsconfig it builds without noEmit: each referenced tsconfig must set noEmit. --build still writes a .tsbuildinfo beside each one, so point tsBuildInfoFile under node_modules/.tmp (create-vue does).",
+    );
   }
   if (add["deploy:check"] && !("wrangler" in deps)) {
     notes.push("deploy:check runs wrangler: add wrangler as a devDependency first.");
@@ -577,7 +637,9 @@ export function planFiles(
       const siblings = paths
         .filter((p) => dirOf(p) === inputs.node)
         .map((p) => p.slice(p.lastIndexOf("/") + 1));
-      const { add, ask, notes: scriptNotes } = missingScripts(pkg, siblings);
+      const tsconfigPath = inputs.node === "." ? "tsconfig.json" : `${inputs.node}/tsconfig.json`;
+      const tsconfig = siblings.includes("tsconfig.json") ? read(tsconfigPath) : "";
+      const { add, ask, notes: scriptNotes } = missingScripts(pkg, siblings, tsconfig);
       notes.push(...scriptNotes);
       const names = Object.keys(add);
       if (names.length) {
@@ -588,7 +650,9 @@ export function planFiles(
         const detail = `add a "${name}" script; the runner is yours to choose`;
         files.push({ path: manifest, action: "ask", detail });
       }
-      if (!names.length && !ask.length) files.push({ path: manifest, action: "keep" });
+      if (!names.length && !ask.length) {
+        files.push({ path: manifest, action: "keep" });
+      }
     }
   }
   return { inputs, ecosystems, uncovered, stops, files, notes };
