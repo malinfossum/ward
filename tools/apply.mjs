@@ -294,15 +294,11 @@ export function listTree(dir, stacks) {
 }
 
 // The type check a repo's own setup calls for, null when that is mine to pick.
-// A type-check script (create-vue names it so) is reused rather than copied,
-// and so is a check script that runs svelte-check (both Svelte templates have
-// one). check alone is too common a name to trust: it may lint or run it all.
+// A type-check script (create-vue names it so) is reused rather than copied.
+// A check script is not: the name is too common to trust (it may lint, or run
+// every step), and SvelteKit's own check runs what checkerFor writes anyway.
 function typecheckFor(deps, scripts, tsconfig) {
-  if (!("astro" in deps)) {
-    if (Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
-    const check = scripts.check;
-    if (typeof check === "string" && /\bsvelte-check\b/.test(check)) return "npm run check --";
-  }
+  if (!("astro" in deps) && Object.hasOwn(scripts, "type-check")) return "npm run type-check --";
   return checkerFor(deps, tsconfig);
 }
 
@@ -365,8 +361,9 @@ function componentExtension(deps) {
 // That exact script, where it checks no files or skips the repo's
 // components, is drift; any other script is the repo's own and trusted as is.
 // A module without a tsconfig.json fails that tsc outright, so that is no
-// drift. The fix reuses a script only when it does not run the same tsc or
-// call typecheck back. pick is the command named, null when it is mine.
+// drift. The fix names the checker itself: whether the repo's own type-check
+// checks the files is mine to judge, so it is offered, never picked. needs is
+// what the fix runs, for the notes; only Svelte leaves the tsconfig to me.
 function staleTypecheck(deps, scripts, tsconfig) {
   if (scripts.typecheck !== "tsc --noEmit" || !tsconfig) return null;
   const ext = componentExtension(deps);
@@ -375,14 +372,14 @@ function staleTypecheck(deps, scripts, tsconfig) {
     ext && `skips .${ext} files`,
   ].filter(Boolean);
   if (!misses.length) return null;
-  const reused = typecheckFor(deps, scripts, tsconfig);
-  const own = scripts[reused?.match(/^npm run (\S+) --$/)?.[1]];
-  const weak = own === "tsc --noEmit" || /\btypecheck\b/.test(String(own));
-  const pick = own !== undefined && weak ? checkerFor(deps, tsconfig) : reused;
-  const fix = pick
-    ? `change it to "${pick}"`
+  const checker = checkerFor(deps, tsconfig);
+  const own = typecheckFor(deps, scripts, tsconfig);
+  const fix = checker
+    ? `change it to "${checker}"`
     : "point svelte-check at the tsconfig that holds the app";
-  return { detail: `typecheck is "tsc --noEmit", which ${misses.join(" and ")}: ${fix}`, pick };
+  const offer = own !== checker ? `, or to "${own}" if type-check checks them` : "";
+  const detail = `typecheck is "tsc --noEmit", which ${misses.join(" and ")}: ${fix}${offer}`;
+  return { detail, needs: checker ?? "svelte-check" };
 }
 
 // tsconfig.json is JSONC: a commented-out "references" line, or an empty
@@ -436,18 +433,21 @@ export function missingScripts(pkg, files, tsconfig = "") {
     if (command) add[name] = command;
     else ask.push(name);
   }
-  if (ask.includes("typecheck") && "svelte" in deps && isSolution(tsconfig)) {
+  // Only svelte-check on a solution-style root leaves typecheck unguessed.
+  const svelteAsk = ask.includes("typecheck") && "svelte" in deps && isSolution(tsconfig);
+  if (svelteAsk) {
     notes.push(
-      "typecheck: svelte-check reads one tsconfig, and the module's tsconfig.json only holds references. Name the one that holds the app (the Vite template's check script uses tsconfig.app.json).",
+      "typecheck: svelte-check reads one tsconfig, and the module's tsconfig.json only holds references. Name the one that holds the app (the Vite template's check script runs svelte-check --tsconfig ./tsconfig.app.json).",
     );
   }
   if (add.lint && !("@biomejs/biome" in deps)) {
     notes.push("lint runs Biome: add @biomejs/biome as a devDependency and a biome.json first.");
   }
   const stale = staleTypecheck(deps, scripts, tsconfig);
-  const install = installNote(add.typecheck ?? stale?.pick ?? "", deps);
+  const runs = add.typecheck ?? stale?.needs ?? (svelteAsk ? "svelte-check" : "");
+  const install = installNote(runs, deps);
   if (install) notes.push(install);
-  if (add.typecheck?.includes(" --build")) {
+  if (runs.includes(" --build")) {
     notes.push(
       "typecheck runs --build, which emits for any tsconfig it builds without noEmit: each referenced tsconfig must set noEmit. --build still writes a .tsbuildinfo beside each one, so point tsBuildInfoFile under node_modules/.tmp (create-vue does).",
     );
@@ -710,10 +710,15 @@ export function planFiles(
         text: `${manifest} is missing: the caller's node input names "${inputs.node}".`,
       });
     } else {
+      let parsed;
       try {
-        pkg = JSON.parse(text);
+        parsed = JSON.parse(text);
       } catch {
         stops.push({ module: "node", text: `${manifest} is not valid JSON.` });
+      }
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) pkg = parsed;
+      else if (parsed !== undefined) {
+        stops.push({ module: "node", text: `${manifest} is not a JSON object.` });
       }
     }
     if (pkg) {
@@ -730,7 +735,10 @@ export function planFiles(
         files.push({ path: manifest, action: "edit", detail, content: withScripts(text, add) });
       }
       for (const name of ask) {
-        const detail = `add a "${name}" script; the runner is yours to choose`;
+        const detail =
+          name === "typecheck"
+            ? 'add a "typecheck" script that runs svelte-check on the tsconfig that holds the app'
+            : `add a "${name}" script; the runner is yours to choose`;
         files.push({ path: manifest, action: "ask", detail });
       }
       if (stale) files.push({ path: manifest, action: "drift", detail: stale });
