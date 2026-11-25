@@ -71,7 +71,7 @@ Ward was for catching problems before they reach `main` without me checking each
 
 ## Feedback and contributions
 
-1. **Accessibility is the weakest part.** The design planned a shared package with Playwright helpers and a live-region audit. It hasn't shipped. Today Ward only runs a repo's own `test:a11y` script if it has one.
+1. **Accessibility is the weakest part, and it is what I build next.** Accessibility matters to me, so I want Ward to test it as seriously as it tests builds. The design planned a shared package with Playwright helpers and a live-region audit. It hasn't shipped yet. Today Ward only runs a repo's own `test:a11y` script if it has one. My next step is to research what a thorough check covers and build that package.
 2. **Python and Docker are detected but not covered.** `stacks.json` lists both as planned, so the audit reports them as uncovered stacks rather than checking them.
 3. **The pin rule is easy to get wrong.** A release cannot pin its own merge commit, so the template lags one release behind. The test catches mistakes, but the rule itself needs a careful read of the README.
 4. **One live test needs a token.** The test that checks Ward against its own baseline is skipped offline, so it only runs where a GitHub token is set.
