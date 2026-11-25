@@ -224,6 +224,10 @@ test("an input that points at nothing on the default branch is a finding", () =>
   assert.match(findings[0][1], /site\/package\.json is not on the default branch/);
   assert.match(findings[1][1], /src\/Old\.slnx, which is not on the default branch/);
   assert.deepEqual(checkInputs({ node: "web", dotnet: "src/App" }, detected, paths), []);
+  // Read as apply reads them: repeated slashes and ./ name the same folder.
+  for (const node of ["./web/", "web//", ".//web", "x/../web"]) {
+    assert.deepEqual(checkInputs({ node, dotnet: "src//App/" }, detected, paths), [], node);
+  }
 });
 
 test("Pester tests need the powershell input, and the input must point at something", () => {
@@ -1275,6 +1279,23 @@ test("an exception can also defer a caller, ruleset or baseline finding", () => 
     !exceptionFindings.some(([, msg]) => /stale exception/.test(msg)),
     "a deferral key is not reported as a stale module exception",
   );
+  // The rules read feeds only ruleset findings, so the deferral covers it failing.
+  const unread = auditRepo(
+    {
+      repo: "wendhq/wend",
+      tree: paths,
+      caller: null,
+      files: {},
+      baseline: { ...baseline, rules: null },
+      self: false,
+    },
+    { stacks: deferred, today: "2026-10-02" },
+  ).findings;
+  assert.ok(!unread.some(([kind]) => kind === "read"), "the read finding is deferred");
+  assert.ok(
+    unread.some(([kind, msg]) => kind === "exception" && /^read finding deferred/.test(msg)),
+  );
+  assert.ok(!unread.some(([, msg]) => /stale deferral/.test(msg)));
 });
 
 test("a deferral with nothing left to defer is reported as stale", () => {

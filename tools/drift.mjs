@@ -3,6 +3,7 @@
 // Dependabot's action bumps, which touch workflows too.
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { parseJson } from "./json.mjs";
 
 export const GUARDED = [
   /^\.github\/workflows\//,
@@ -21,7 +22,7 @@ export function guardedChanges(files) {
 export function scriptsChanged(before, after) {
   const scripts = (text) => {
     try {
-      return JSON.stringify(JSON.parse(text).scripts ?? {});
+      return JSON.stringify(parseJson(text).scripts ?? {});
     } catch {
       return null;
     }

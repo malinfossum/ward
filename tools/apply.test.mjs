@@ -717,7 +717,7 @@ test("a repo's own type-check is offered beside the checker, never reused unread
     assert.equal(JSON.parse(edit.content).scripts.typecheck, "vue-tsc --build --force");
     assert.equal(
       plan.notes[0],
-      'typecheck runs vue-tsc --build --force: change it to "npm run type-check --" if the repo\'s type-check checks the same files.',
+      'typecheck runs vue-tsc --build --force: change it to "npm run type-check --" if the repo\'s type-check checks the files.',
     );
   }
   // Astro's checker is astro check, so a type-check there is not offered.
@@ -731,7 +731,7 @@ test("a repo's own type-check is offered beside the checker, never reused unread
   const svelte = planFor({ "type-check": "svelte-check" }, { svelte: "5.43.0" }, REFS);
   assert.equal(
     file(svelte, "package.json").detail,
-    'add a "typecheck" script that runs svelte-check on the tsconfig that holds the app, or "npm run type-check --" if type-check checks it',
+    'add a "typecheck" script that runs svelte-check on the tsconfig that holds the app, or one that runs "npm run type-check --" if the repo\'s type-check checks the files',
   );
 });
 
@@ -883,7 +883,7 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
   const vue = { ...ts, vue: "3.5.0", "vue-tsc": "3.3.11" };
   assert.equal(
     file(planFor(vue, REFS, { "type-check": "vue-tsc --build" }), "package.json").detail,
-    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "vue-tsc --build --force", or change it to "npm run type-check --" if type-check checks them',
+    'typecheck is "tsc --noEmit", which checks no files under a solution-style tsconfig.json and skips .vue files: change it to "vue-tsc --build --force", or change it to "npm run type-check --" if the repo\'s type-check checks the files',
   );
   // The fix names the package it needs, Svelte on a solution root included.
   const svelteRoot = planFor({ ...ts, svelte: "5.43.0" }, REFS);
@@ -897,7 +897,7 @@ test("the tsc --noEmit that apply used to write is drift where it misses files",
   const offered = planFor({ ...ts, svelte: "5.43.0" }, REFS, { "type-check": "svelte-check" });
   assert.match(
     file(offered, "package.json").detail,
-    /holds the app, or change it to "npm run type-check --" if type-check checks them$/,
+    /holds the app, or change it to "npm run type-check --" if the repo's type-check checks the files$/,
   );
   const svelte = planFor({ ...ts, svelte: "5.43.0" }, "{}");
   assert.match(file(svelte, "package.json").detail, /change it to "svelte-check --tsconfig/);
@@ -1780,6 +1780,21 @@ test("an empty repo reads as one with no files: every settings command gives a r
     assert.ok(!stub.calls.some((c) => c.path.includes("/contents/")));
   } finally {
     stub.restore();
+  }
+  // With no code, default setup finds no language; the repo is new, not exempt.
+  const noLanguage = stubFetch(
+    bareRoutes([
+      [/\/git\/trees\//, 409, { message: "Git Repository is empty." }, "GET"],
+      [/\/code-scanning\/default-setup$/, 200, { state: "not-configured", languages: [] }, "GET"],
+    ]),
+  );
+  try {
+    const out = await runApply(["ruleset", "malinfossum/x"], ENV);
+    assert.deepEqual(out.lines, [
+      "wait    malinfossum/x has no commits yet, so CodeQL has nothing to analyze; push the first commit, then rerun once CodeQL has analyzed main.",
+    ]);
+  } finally {
+    noLanguage.restore();
   }
   // Any other 409 is still an error.
   const other = stubFetch(

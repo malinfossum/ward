@@ -5,6 +5,7 @@
 // alive. Each check is a pure function over fetched data that returns
 // [kind, message] findings; main() only fetches and reports.
 import { appendFileSync } from "node:fs";
+import { posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { fetchFile, listRepos, retrying } from "./repo-hygiene.mjs";
@@ -152,6 +153,11 @@ export function checkCaller(text, { self, isPrivate = false }) {
 
 const sample = (files) => files.slice(0, 3).join(", ");
 
+// A caller input as the runner's working-directory reads it: `./web`, `web`,
+// `web/` and `.//web//` are one directory, and `./` alone is the root. apply
+// reads inputs the same way, so the two never disagree on a caller.
+export const bareDir = (value) => posix.normalize(value || ".").replace(/\/+$/, "") || ".";
+
 // A module the repo's files need must be on, and an input that is on must
 // point at something on the default branch. A merged PR that turned a module
 // off or moved a project shows up here. inputs is null when there is no caller;
@@ -194,12 +200,10 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
   }
   if (!inputs) return findings;
   const have = new Set(paths);
-  // `./web` and `web` are the same path; `./` alone is the root.
-  const bare = (input) => input.replace(/^\.\//, "") || ".";
   const node = inputs.node ?? "";
   if (node) {
-    const dir = bare(node);
-    const manifest = dir === "." ? "package.json" : `${dir.replace(/\/$/, "")}/package.json`;
+    const dir = bareDir(node);
+    const manifest = dir === "." ? "package.json" : `${dir}/package.json`;
     if (!have.has(manifest)) {
       findings.push([
         "inputs",
@@ -209,8 +213,8 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
   }
   for (const key of ["dotnet", "powershell"]) {
     const value = inputs[key] ?? "";
-    if (!value || bare(value) === ".") continue;
-    const target = bare(value).replace(/\/$/, "");
+    if (!value || bareDir(value) === ".") continue;
+    const target = bareDir(value);
     const exists = have.has(target) || paths.some((path) => path.startsWith(`${target}/`));
     if (!exists) {
       findings.push(["inputs", `${key} points at ${value}, which is not on the default branch.`]);
@@ -221,9 +225,11 @@ export function checkInputs(inputs, detected, paths, exceptions = {}) {
 
 // Each field is the API's answer, or null when the token could not read it
 // (no admin read, which fetchRepoData decides once per repo, a 401/403, or
-// anything but 200 for the branch rules). null is a warning,
-// never a pass: a false green here would hide exactly what the audit exists
-// to find, and an empty rule list in its place would be a false red. unread
+// anything but 200 for the branch rules). null is never a pass: a false green
+// here would hide exactly what the audit exists to find, and an empty rule
+// list in its place would be a false red. An unread setting is a token
+// finding (a warning on an org without an admin token); unread branch rules
+// are a read finding, which fails on every owner. unread
 // is set when no admin token exists for the owner: then that one sentence,
 // naming the missing secret, is the only token finding for its settings.
 // privateReporting is also "n/a" on a private or archived repo, where there is
@@ -514,12 +520,14 @@ export function auditRepo(
   findings.push(...checkRuntimes({ frameworks: targetFrameworks(files), nodeVersion, today }));
   // A joint repo can defer a whole kind until the co-owner agrees, and a repo
   // kept off Ward on purpose defers it for good; the weekly warning keeps it
-  // visible and dated either way.
-  const deferred = findings.map(([kind, message]) =>
-    DEFERRABLE.includes(kind) && exceptions[kind]
-      ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[kind]})`]
-      : [kind, message],
-  );
+  // visible and dated either way. The branch rules read feeds only ruleset
+  // findings, so a ruleset deferral covers it failing too.
+  const deferred = findings.map(([kind, message]) => {
+    const key = kind === "read" ? "ruleset" : kind;
+    return DEFERRABLE.includes(key) && exceptions[key]
+      ? ["exception", `${kind} finding deferred by exception: ${message} (${exceptions[key]})`]
+      : [kind, message];
+  });
   // A deferral with nothing left to defer is stale, or a later regression of
   // that kind would stay a warning for good. Unread settings give a token
   // finding, never a baseline one, so the baseline key is not judged then:
@@ -749,6 +757,7 @@ export async function fetchRepoData(meta, { admin, read, stacks = loadStacks(), 
   return {
     repo,
     self: repo === WARD,
+    empty,
     isPrivate: meta.private === true,
     tree: paths,
     caller,

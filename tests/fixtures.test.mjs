@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { git, scrubbed } from "../tools/git.mjs";
+import { BOM } from "../tools/json.mjs";
 
 const ME = "malinfossum.dev@proton.me";
 
@@ -54,10 +55,11 @@ function identity(email, message) {
 // Run in place, a fixture that rewrites files would dirty Ward's own tree,
 // and the lint check would see any Ward file saved while the lint runs.
 // The ceiling keeps git from finding a repo above the temp folder.
-function copied(fixture, { repo = true, env: extra = {} } = {}) {
+function copied(fixture, { repo = true, env: extra = {}, prepare } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "ward-node-"));
   try {
     cpSync(join("fixtures", fixture), dir, { recursive: true });
+    prepare?.(dir);
     const env = { ...extra, GIT_CEILING_DIRECTORIES: dirname(dir) };
     if (repo) {
       const setup = (...args) => {
@@ -75,6 +77,16 @@ function copied(fixture, { repo = true, env: extra = {} } = {}) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test("node-ok with a UTF-8 BOM in package.json passes, as npm ci does", () => {
+  const { status, out } = copied("node-ok", {
+    prepare: (dir) => {
+      const manifest = join(dir, "package.json");
+      writeFileSync(manifest, BOM + readFileSync(manifest, "utf8"));
+    },
+  });
+  assert.equal(status, 0, out);
+});
 
 test("node-lint-fix passes outside a git repo, with a notice that the lint check was skipped", () => {
   const { status, out, ran } = copied("node-lint-fix", { repo: false });

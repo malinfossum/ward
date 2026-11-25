@@ -14,13 +14,15 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, posix, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { requiredChecksFrom } from "./automerge.mjs";
 import { languagesFor, trackedFiles } from "./codeql-languages.mjs";
 import { git } from "./git.mjs";
+import { BOM, parseJson } from "./json.mjs";
 import { planSteps } from "./node-contract.mjs";
 import {
+  bareDir,
   CODEQL_PINNED,
   exceptionsFor,
   fetchRepoData,
@@ -298,7 +300,8 @@ export function listTree(dir, stacks) {
 // offers the script. A check script is not even offered: the name is too
 // common to trust (it may lint, or run every step), and SvelteKit's own check
 // runs what checkerFor writes anyway. Astro's astro check is the checker.
-const OWN_TYPECHECK = "npm run type-check --";
+// One wording wherever it is offered: a drift's fix, an ask, a note.
+const OFFER = `"npm run type-check --" if the repo's type-check checks the files`;
 const ownTypecheck = (deps, scripts) => !("astro" in deps) && Object.hasOwn(scripts, "type-check");
 
 // svelte-check on a solution-style root is the one typecheck apply cannot
@@ -383,9 +386,7 @@ function staleTypecheck(deps, scripts, tsconfig) {
   if (!misses.length) return null;
   const checker = checkerFor(deps, tsconfig);
   const fix = checker ? `change it to "${checker}"` : UNPICKED.fix;
-  const offer = ownTypecheck(deps, scripts)
-    ? `, or change it to "${OWN_TYPECHECK}" if type-check checks them`
-    : "";
+  const offer = ownTypecheck(deps, scripts) ? `, or change it to ${OFFER}` : "";
   const detail = `typecheck is "tsc --noEmit", which ${misses.join(" and ")}: ${fix}${offer}`;
   return { detail, needs: checker ?? UNPICKED.needs };
 }
@@ -449,16 +450,14 @@ export function missingScripts(pkg, files, tsconfig = "") {
     else if (name !== "typecheck") {
       ask.push({ name, detail: `add a "${name}" script; the runner is yours to choose` });
     } else {
-      const or = offer ? `, or "${OWN_TYPECHECK}" if type-check checks it` : "";
+      const or = offer ? `, or one that runs ${OFFER}` : "";
       ask.push({ name, detail: `${UNPICKED.ask}${or}` });
       notes.push(UNPICKED.note);
     }
   }
   const unpicked = ask.some((a) => a.name === "typecheck");
   if (add.typecheck && offer) {
-    notes.push(
-      `typecheck runs ${add.typecheck}: change it to "${OWN_TYPECHECK}" if the repo's type-check checks the same files.`,
-    );
+    notes.push(`typecheck runs ${add.typecheck}: change it to ${OFFER}.`);
   }
   if (add.lint && !("@biomejs/biome" in deps)) {
     notes.push("lint runs Biome: add @biomejs/biome as a devDependency and a biome.json first.");
@@ -479,10 +478,6 @@ export function missingScripts(pkg, files, tsconfig = "") {
   }
   return { add, ask, notes, stale: stale?.detail ?? null };
 }
-
-// A UTF-8 BOM (some Windows editors write one) is not JSON, but npm reads past it.
-const BOM = "\uFEFF";
-const parseJson = (text) => JSON.parse(text.startsWith(BOM) ? text.slice(1) : text);
 
 // package.json with the scripts added, in the file's own indentation, line
 // endings and BOM.
@@ -560,8 +555,8 @@ export function addCodeqlJob(text, template) {
   return lines.join(eol);
 }
 
-// `./web`, `web`, `web/` and `.//web//` are one directory; `./` alone is the root.
-const bare = (value) => posix.normalize(value || ".").replace(/\/+$/, "") || ".";
+// The audit reads caller inputs the same way: one normalizer for both.
+const bare = bareDir;
 const sameDir = (a, b) => bare(a.replace(/^\//, "")) === bare(b.replace(/^\//, ""));
 const manifestIn = (dir) => (dir === "." ? "package.json" : `${dir}/package.json`);
 
@@ -837,6 +832,7 @@ export async function readState(repo, token, { metaOnlyIfArchived = false } = {}
     // The default branch's files and caller: where settings looks for the codeql
     // job and the languages it will scan when no --dir is given.
     tree: data.tree,
+    empty: data.empty,
     caller: data.caller,
     classic,
     // Classic protection reads 401 or 403 without admin, which would pass for "none":
@@ -1223,10 +1219,13 @@ export function planRuleset(state, template, { bypassAdmin = false, noCodeql = f
   if (stops.length) return { stops, wait: "", action: "", body: null };
   if (!noCodeql && !state.analysed) {
     // A repo CodeQL has no language for never gets an analysis; waiting would never end.
+    // An empty repo has no language either, only because it has no code yet.
     const none = state.baseline.codeScanning?.languages?.length === 0;
-    const wait = none
-      ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
-      : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
+    const wait = state.empty
+      ? `${state.repo} has no commits yet, so CodeQL has nothing to analyze; push the first commit, then rerun once CodeQL has analyzed ${state.branch}.`
+      : none
+        ? `CodeQL has no language to analyse on ${state.branch}, so it will never analyse it; rerun with --no-codeql and add a dated ruleset exception in stacks.json.`
+        : `CodeQL has not analysed ${state.branch} yet, and a code-scanning rule before that blocks every merge; rerun in a few minutes (up to an hour on a first run).`;
     return { stops, wait, action: "", body: null };
   }
   const body = mergeRuleset(template, state.existing, { bypassAdmin, noCodeql });
